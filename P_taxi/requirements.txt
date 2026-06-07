@@ -5,7 +5,6 @@ channels==4.3.2
 charset-normalizer==3.4.7
 click==8.3.2
 colorama==0.4.6
-dj-database-url==3.1.2
 Django==5.0
 django-cors-headers==4.9.0
 django-filter==23.2
@@ -22,8 +21,6 @@ o==0.0.2b2
 openpyxl==3.1.5
 packaging==26.2
 pillow==12.2.0
-psycopg==3.3.3
-psycopg2-binary==2.9.12
 Pygments==2.20.0
 PyJWT==2.13.0
 pytz==2026.2
