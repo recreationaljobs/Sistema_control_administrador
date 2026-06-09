@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import authenticate
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.utils import timezone
 
 from rest_framework import status, viewsets
@@ -121,7 +121,7 @@ class LoginView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        if user.rol.codigo != "superadmin" and not user.sucursal:
+        if user.rol.codigo == "admin_sucursal" and not user.sucursal:
             return Response(
                 {
                     "detail": "Este usuario no tiene una sucursal asignada."
@@ -159,9 +159,26 @@ class SucursalViewSet(viewsets.ModelViewSet):
 
 
 class RolViewSet(viewsets.ModelViewSet):
-    queryset = Rol.objects.all().order_by("nombre")
     serializer_class = RolSerializer
-    permission_classes = [EsSuperAdmin]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [EsAdminSucursalOSuperAdmin()]
+
+        return [EsSuperAdmin()]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        queryset = Rol.objects.all().order_by("nombre")
+
+        if es_superadmin(user):
+            return queryset
+
+        if es_admin_sucursal(user):
+            return queryset.exclude(codigo="superadmin")
+
+        return Rol.objects.none()
 
 
 class EstadoVehiculoViewSet(viewsets.ModelViewSet):
@@ -217,15 +234,31 @@ class UsuarioViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Usuario.objects.select_related("rol", "sucursal").all().order_by("-id")
+
+        queryset = Usuario.objects.select_related(
+            "rol",
+            "sucursal"
+        ).all().order_by("-id")
 
         if es_superadmin(user):
-            return qs
+            return queryset.filter(
+                Q(sucursal__isnull=True) |
+                Q(rol__codigo="admin_sucursal")
+            )
 
         if es_admin_sucursal(user):
-            return qs.filter(sucursal=user.sucursal).exclude(rol__codigo="superadmin")
+            return queryset.filter(
+                sucursal=user.sucursal
+            ).exclude(
+                rol__codigo__in=["superadmin", "usuario_sistema", "admin_sucursal"]
+            )
 
-        return qs.none()
+        return queryset.filter(id=user.id)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["request"] = self.request
+        return context
 
     @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
     def me(self, request):
@@ -234,7 +267,6 @@ class UsuarioViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         rol = serializer.validated_data.get("rol")
-        sucursal = serializer.validated_data.get("sucursal")
 
         if es_superadmin(user):
             serializer.save()
@@ -244,13 +276,14 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             if not user.sucursal:
                 raise ValidationError("Tu usuario no tiene una sucursal asignada.")
 
-            if rol and rol.codigo == "superadmin":
-                raise PermissionDenied("No puedes crear usuarios superadmin.")
+            if not rol or rol.codigo != "taxista":
+                raise PermissionDenied("Un administrador de sucursal solo puede crear usuarios taxistas.")
 
-            serializer.save(sucursal=user.sucursal)
+            serializer.save()
             return
 
         raise PermissionDenied("No tienes permiso para crear usuarios.")
+
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -265,10 +298,10 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             if instance.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes modificar usuarios de otra sucursal.")
 
-            if rol and rol.codigo == "superadmin":
-                raise PermissionDenied("No puedes asignar rol superadmin.")
+            if not rol or rol.codigo != "taxista":
+                raise PermissionDenied("Un administrador de sucursal solo puede modificar usuarios taxistas.")
 
-            serializer.save(sucursal=user.sucursal)
+            serializer.save()
             return
 
         raise PermissionDenied("No tienes permiso para modificar usuarios.")
@@ -280,14 +313,24 @@ class ConductorViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy"]:
             return [EsAdminSucursalOSuperAdmin()]
+
         return [IsAuthenticated()]
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["request"] = self.request
+        return context
 
     def get_queryset(self):
         user = self.request.user
-        qs = Conductor.objects.select_related("sucursal", "usuario").all()
+
+        qs = Conductor.objects.select_related(
+            "sucursal",
+            "usuario"
+        ).all().order_by("-id")
 
         if es_superadmin(user):
-            return qs
+            return qs.filter(sucursal__isnull=True)
 
         if es_admin_sucursal(user):
             return qs.filter(sucursal=user.sucursal)
@@ -301,10 +344,13 @@ class ConductorViewSet(viewsets.ModelViewSet):
         user = self.request.user
 
         if es_superadmin(user):
-            serializer.save()
+            serializer.save(sucursal=None)
             return
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
             serializer.save(sucursal=user.sucursal)
             return
 
@@ -315,17 +361,62 @@ class ConductorViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
 
         if es_superadmin(user):
-            serializer.save()
+            if instance.sucursal_id is not None:
+                raise PermissionDenied("No puedes modificar conductores de una sucursal desde el panel superadmin.")
+
+            serializer.save(sucursal=None)
             return
 
         if es_admin_sucursal(user):
             if instance.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes modificar conductores de otra sucursal.")
+
             serializer.save(sucursal=user.sucursal)
             return
 
         raise PermissionDenied("No tienes permiso para modificar conductores.")
 
+    @action(detail=False, methods=["get"], url_path="disponibles-usuario")
+    def disponibles_usuario(self, request):
+        user = request.user
+
+        qs = Conductor.objects.select_related(
+            "sucursal",
+            "usuario"
+        ).filter(
+            usuario__isnull=True,
+            activo=True
+        ).order_by("nombre", "apellido")
+
+        search = request.query_params.get("search", "").strip()
+
+        if es_superadmin(user):
+            qs = qs.filter(sucursal__isnull=True)
+
+        elif es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
+            qs = qs.filter(sucursal=user.sucursal)
+
+        else:
+            return Response([])
+
+        if search:
+            qs = (
+                qs.filter(nombre__icontains=search)
+                | qs.filter(apellido__icontains=search)
+                | qs.filter(cedula__icontains=search)
+            )
+
+            if es_superadmin(user):
+                qs = qs.filter(sucursal__isnull=True)
+
+            if es_admin_sucursal(user):
+                qs = qs.filter(sucursal=user.sucursal)
+
+        serializer = self.get_serializer(qs.distinct(), many=True)
+        return Response(serializer.data)
 
 class VehiculoViewSet(viewsets.ModelViewSet):
     serializer_class = VehiculoSerializer
@@ -335,19 +426,27 @@ class VehiculoViewSet(viewsets.ModelViewSet):
             return [EsAdminSucursalOSuperAdmin()]
         return [IsAuthenticated()]
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["request"] = self.request
+        return context
+
     def get_queryset(self):
         user = self.request.user
-        qs = Vehiculo.objects.select_related("sucursal", "estado").all()
+
+        qs = Vehiculo.objects.select_related(
+            "sucursal",
+            "estado"
+        ).all().order_by("placa")
 
         if es_superadmin(user):
-            return qs
+            return qs.filter(sucursal__isnull=True)
 
         if es_admin_sucursal(user):
             return qs.filter(sucursal=user.sucursal)
 
         if es_taxista(user):
             return qs.filter(
-                sucursal=user.sucursal,
                 asignaciones__conductor__usuario=user,
                 asignaciones__activa=True
             ).distinct()
@@ -358,10 +457,13 @@ class VehiculoViewSet(viewsets.ModelViewSet):
         user = self.request.user
 
         if es_superadmin(user):
-            serializer.save()
+            serializer.save(sucursal=None)
             return
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
             serializer.save(sucursal=user.sucursal)
             return
 
@@ -372,12 +474,18 @@ class VehiculoViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
 
         if es_superadmin(user):
-            serializer.save()
+            if instance.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes modificar vehículos de una sucursal desde el panel superadmin."
+                )
+
+            serializer.save(sucursal=None)
             return
 
         if es_admin_sucursal(user):
             if instance.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes modificar vehículos de otra sucursal.")
+
             serializer.save(sucursal=user.sucursal)
             return
 
@@ -390,19 +498,28 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         return [EsAdminSucursalOSuperAdmin()]
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["request"] = self.request
+        return context
+
     def get_queryset(self):
         user = self.request.user
+
         qs = AsignacionVehiculo.objects.select_related(
             "sucursal",
             "conductor",
             "vehiculo"
-        ).all()
+        ).all().order_by("-fecha_inicio")
 
         if es_superadmin(user):
-            return qs
+            return qs.filter(sucursal__isnull=True)
 
         if es_admin_sucursal(user):
             return qs.filter(sucursal=user.sucursal)
+
+        if es_taxista(user):
+            return qs.filter(conductor__usuario=user)
 
         return qs.none()
 
@@ -411,16 +528,30 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
         conductor = serializer.validated_data.get("conductor")
         vehiculo = serializer.validated_data.get("vehiculo")
 
-        if conductor.sucursal_id != vehiculo.sucursal_id:
-            raise ValidationError("El conductor y el vehículo deben pertenecer a la misma sucursal.")
-
         if es_superadmin(user):
-            serializer.save(sucursal=conductor.sucursal)
+            if conductor.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes asignar conductores de una sucursal desde el panel superadmin."
+                )
+
+            if vehiculo.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes asignar vehículos de una sucursal desde el panel superadmin."
+                )
+
+            serializer.save(sucursal=None)
             return
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
             if conductor.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes asignar conductores de otra sucursal.")
+
+            if vehiculo.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes asignar vehículos de otra sucursal.")
+
             serializer.save(sucursal=user.sucursal)
             return
 
@@ -429,14 +560,41 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user
         instance = self.get_object()
+        conductor = serializer.validated_data.get("conductor", instance.conductor)
+        vehiculo = serializer.validated_data.get("vehiculo", instance.vehiculo)
 
         if es_superadmin(user):
-            serializer.save()
+            if instance.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes modificar asignaciones de una sucursal desde el panel superadmin."
+                )
+
+            if conductor.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes asignar conductores de una sucursal desde el panel superadmin."
+                )
+
+            if vehiculo.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes asignar vehículos de una sucursal desde el panel superadmin."
+                )
+
+            serializer.save(sucursal=None)
             return
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
             if instance.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes modificar asignaciones de otra sucursal.")
+
+            if conductor.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes asignar conductores de otra sucursal.")
+
+            if vehiculo.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes asignar vehículos de otra sucursal.")
+
             serializer.save(sucursal=user.sucursal)
             return
 
@@ -451,8 +609,14 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             return [EsAdminSucursalOSuperAdmin()]
         return [IsAuthenticated()]
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["request"] = self.request
+        return context
+
     def get_queryset(self):
         user = self.request.user
+
         qs = JornadaDiaria.objects.select_related(
             "sucursal",
             "estado",
@@ -470,11 +634,14 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         vehiculo_id = self.request.query_params.get("vehiculo")
 
         if es_superadmin(user):
-            pass
+            qs = qs.filter(sucursal__isnull=True)
+
         elif es_admin_sucursal(user):
             qs = qs.filter(sucursal=user.sucursal)
+
         elif es_taxista(user):
-            qs = qs.filter(sucursal=user.sucursal, conductor__usuario=user)
+            qs = qs.filter(conductor__usuario=user)
+
         else:
             return qs.none()
 
@@ -495,6 +662,10 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
 
         return qs
 
+    def _obtener_porcentaje(self, sucursal):
+        configuracion = obtener_configuracion_sucursal(sucursal)
+        return configuracion.porcentaje_pago_conductor
+
     def perform_create(self, serializer):
         user = self.request.user
 
@@ -513,17 +684,45 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         if not vehiculo:
             raise ValidationError("Debes indicar el vehículo.")
 
-        if conductor.sucursal_id != vehiculo.sucursal_id:
-            raise ValidationError("El conductor y el vehículo deben pertenecer a la misma sucursal.")
+        if es_superadmin(user):
+            if conductor.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes registrar jornadas de conductores de sucursal desde el panel superadmin."
+                )
 
-        if es_admin_sucursal(user) and conductor.sucursal_id != user.sucursal_id:
-            raise PermissionDenied("No puedes registrar jornadas en otra sucursal.")
+            if vehiculo.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes registrar jornadas de vehículos de sucursal desde el panel superadmin."
+                )
 
-        if es_taxista(user) and conductor.usuario_id != user.id:
-            raise PermissionDenied("No puedes crear jornadas para otro conductor.")
+            sucursal = None
+
+        elif es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
+            if conductor.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes registrar jornadas para conductores de otra sucursal.")
+
+            if vehiculo.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes registrar jornadas para vehículos de otra sucursal.")
+
+            sucursal = user.sucursal
+
+        elif es_taxista(user):
+            if conductor.usuario_id != user.id:
+                raise PermissionDenied("No puedes crear jornadas para otro conductor.")
+
+            if conductor.sucursal_id != vehiculo.sucursal_id:
+                raise ValidationError("El conductor y el vehículo deben pertenecer al mismo entorno.")
+
+            sucursal = conductor.sucursal
+
+        else:
+            raise PermissionDenied("No tienes permiso para crear jornadas.")
 
         asignacion_activa = AsignacionVehiculo.objects.filter(
-            sucursal=conductor.sucursal,
+            sucursal=sucursal,
             conductor=conductor,
             vehiculo=vehiculo,
             activa=True
@@ -532,7 +731,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         if not asignacion_activa:
             raise ValidationError("El conductor no tiene una asignación activa con ese vehículo.")
 
-        porcentaje = conductor.porcentaje_pago
+        porcentaje = self._obtener_porcentaje(sucursal)
 
         campos_calculados = calcular_campos_jornada(
             serializer.validated_data.get("kilometraje_inicial"),
@@ -542,7 +741,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         )
 
         jornada = serializer.save(
-            sucursal=conductor.sucursal,
+            sucursal=sucursal,
             conductor=conductor,
             porcentaje_pago_conductor=porcentaje,
             kilometros_recorridos=campos_calculados["kilometros_recorridos"],
@@ -556,23 +755,83 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         instance = self.get_object()
 
-        if es_admin_sucursal(user) and instance.sucursal_id != user.sucursal_id:
-            raise PermissionDenied("No puedes modificar jornadas de otra sucursal.")
-
-        if es_taxista(user) and instance.conductor.usuario_id != user.id:
-            raise PermissionDenied("No puedes modificar jornadas de otro conductor.")
-
         conductor = serializer.validated_data.get("conductor", instance.conductor)
         vehiculo = serializer.validated_data.get("vehiculo", instance.vehiculo)
 
-        if conductor.sucursal_id != vehiculo.sucursal_id:
-            raise ValidationError("El conductor y el vehículo deben pertenecer a la misma sucursal.")
+        if es_superadmin(user):
+            if instance.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes modificar jornadas de sucursal desde el panel superadmin."
+                )
 
-        porcentaje = conductor.porcentaje_pago
+            if conductor.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes usar conductores de sucursal desde el panel superadmin."
+                )
 
-        km_inicial = serializer.validated_data.get("kilometraje_inicial", instance.kilometraje_inicial)
-        km_final = serializer.validated_data.get("kilometraje_final", instance.kilometraje_final)
-        ingreso_bruto = serializer.validated_data.get("ingreso_bruto", instance.ingreso_bruto)
+            if vehiculo.sucursal_id is not None:
+                raise PermissionDenied(
+                    "No puedes usar vehículos de sucursal desde el panel superadmin."
+                )
+
+            sucursal = None
+
+        elif es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
+            if instance.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes modificar jornadas de otra sucursal.")
+
+            if conductor.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes usar conductores de otra sucursal.")
+
+            if vehiculo.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes usar vehículos de otra sucursal.")
+
+            sucursal = user.sucursal
+
+        elif es_taxista(user):
+            if instance.conductor.usuario_id != user.id:
+                raise PermissionDenied("No puedes modificar jornadas de otro conductor.")
+
+            if conductor.usuario_id != user.id:
+                raise PermissionDenied("No puedes cambiar la jornada a otro conductor.")
+
+            if conductor.sucursal_id != vehiculo.sucursal_id:
+                raise ValidationError("El conductor y el vehículo deben pertenecer al mismo entorno.")
+
+            sucursal = conductor.sucursal
+
+        else:
+            raise PermissionDenied("No tienes permiso para modificar jornadas.")
+
+        asignacion_activa = AsignacionVehiculo.objects.filter(
+            sucursal=sucursal,
+            conductor=conductor,
+            vehiculo=vehiculo,
+            activa=True
+        ).exists()
+
+        if not asignacion_activa:
+            raise ValidationError("El conductor no tiene una asignación activa con ese vehículo.")
+
+        porcentaje = self._obtener_porcentaje(sucursal)
+
+        km_inicial = serializer.validated_data.get(
+            "kilometraje_inicial",
+            instance.kilometraje_inicial
+        )
+
+        km_final = serializer.validated_data.get(
+            "kilometraje_final",
+            instance.kilometraje_final
+        )
+
+        ingreso_bruto = serializer.validated_data.get(
+            "ingreso_bruto",
+            instance.ingreso_bruto
+        )
 
         campos_calculados = calcular_campos_jornada(
             km_inicial,
@@ -582,8 +841,9 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         )
 
         jornada = serializer.save(
-            sucursal=conductor.sucursal,
+            sucursal=sucursal,
             conductor=conductor,
+            vehiculo=vehiculo,
             porcentaje_pago_conductor=porcentaje,
             kilometros_recorridos=campos_calculados["kilometros_recorridos"],
             pago_conductor=campos_calculados["pago_conductor"]

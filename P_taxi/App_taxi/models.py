@@ -162,9 +162,10 @@ class Conductor(models.Model):
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,
-        related_name="conductores"
+        related_name="conductores",
+        null=True,
+        blank=True
     )
-
     usuario = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -213,7 +214,10 @@ class Vehiculo(models.Model):
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,
+        blank=True,
+        null=True,
         related_name="vehiculos"
+       
     )
 
     estado = models.ForeignKey(
@@ -265,6 +269,8 @@ class AsignacionVehiculo(models.Model):
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,
+        blank=True,
+        null=True,
         related_name="asignaciones"
     )
 
@@ -309,6 +315,8 @@ class JornadaDiaria(models.Model):
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,
+        blank=True,
+        null=True,
         related_name="jornadas"
     )
 

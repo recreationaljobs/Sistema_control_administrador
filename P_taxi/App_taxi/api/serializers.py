@@ -76,12 +76,28 @@ class EstadoMantenimientoSerializer(serializers.ModelSerializer):
         fields = ["id", "nombre", "codigo"]
 
 
-class UsuarioSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=False, allow_blank=True)
+from rest_framework import serializers
+from App_taxi.models import Usuario, Rol, Sucursal, Conductor
 
+
+class UsuarioSerializer(serializers.ModelSerializer):
     rol_nombre = serializers.CharField(source="rol.nombre", read_only=True)
     rol_codigo = serializers.CharField(source="rol.codigo", read_only=True)
     sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
+
+    conductor_id = serializers.IntegerField(
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
+
+    conductor_nombre = serializers.SerializerMethodField()
+
+    password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True
+    )
 
     class Meta:
         model = Usuario
@@ -101,19 +117,119 @@ class UsuarioSerializer(serializers.ModelSerializer):
             "is_active",
             "is_staff",
             "is_superuser",
-            "date_joined",
+            "conductor_id",
+            "conductor_nombre",
         ]
+
         read_only_fields = [
-            "id",
+            "is_staff",
+            "is_superuser",
             "rol_nombre",
             "rol_codigo",
             "sucursal_nombre",
-            "date_joined",
-            "is_staff",
-            "is_superuser",
+            "conductor_nombre",
         ]
 
+        extra_kwargs = {
+            "sucursal": {
+                "required": False,
+                "allow_null": True,
+            },
+            "rol": {
+                "required": True,
+                "allow_null": False,
+            },
+        }
+
+    def get_conductor_nombre(self, obj):
+        conductor = getattr(obj, "perfil_conductor", None)
+
+        if not conductor:
+            return None
+
+        return f"{conductor.nombre} {conductor.apellido}".strip()
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        usuario_actual = request.user if request else None
+
+        rol = attrs.get("rol") or getattr(self.instance, "rol", None)
+        sucursal = attrs.get("sucursal") or getattr(self.instance, "sucursal", None)
+        conductor_id = attrs.get("conductor_id", None)
+
+        if not rol:
+            raise serializers.ValidationError({
+                "rol": "Debes seleccionar un rol para este usuario."
+            })
+
+        codigo_rol = rol.codigo
+
+        codigo_usuario_actual = (
+            usuario_actual.rol.codigo
+            if usuario_actual and usuario_actual.rol
+            else None
+        )
+
+        if codigo_usuario_actual == "admin_sucursal":
+            if codigo_rol != "taxista":
+                raise serializers.ValidationError({
+                    "rol": "Un administrador de sucursal solo puede crear usuarios taxistas."
+                })
+
+        if codigo_rol == "admin_sucursal":
+            if not sucursal:
+                raise serializers.ValidationError({
+                    "sucursal": "Debes seleccionar una sucursal para este administrador."
+                })
+
+        if codigo_rol == "taxista":
+            if not self.instance and not conductor_id:
+                raise serializers.ValidationError({
+                    "conductor_id": "Debes seleccionar el taxista/conductor al que se le creará el usuario."
+                })
+
+            if conductor_id:
+                try:
+                    conductor = Conductor.objects.select_related(
+                        "sucursal",
+                        "usuario"
+                    ).get(id=conductor_id)
+                except Conductor.DoesNotExist:
+                    raise serializers.ValidationError({
+                        "conductor_id": "El taxista/conductor seleccionado no existe."
+                    })
+
+                if conductor.usuario and conductor.usuario != self.instance:
+                    raise serializers.ValidationError({
+                        "conductor_id": "Este taxista/conductor ya tiene un usuario asociado."
+                    })
+
+                if codigo_usuario_actual == "superadmin":
+                    if conductor.sucursal_id is not None:
+                        raise serializers.ValidationError({
+                            "conductor_id": "Desde el panel superadmin solo puedes crear usuarios para conductores del superadmin."
+                        })
+
+                if codigo_usuario_actual == "admin_sucursal":
+                    if not usuario_actual.sucursal:
+                        raise serializers.ValidationError({
+                            "sucursal": "Tu usuario no tiene una sucursal asignada."
+                        })
+
+                    if conductor.sucursal_id != usuario_actual.sucursal_id:
+                        raise serializers.ValidationError({
+                            "conductor_id": "No puedes crear usuario para un taxista de otra sucursal."
+                        })
+
+                attrs["sucursal"] = conductor.sucursal
+
+        if codigo_rol in ["superadmin", "usuario_sistema"]:
+            attrs["sucursal"] = None
+
+        return attrs
+
     def create(self, validated_data):
+        conductor_id = validated_data.pop("conductor_id", None)
         password = validated_data.pop("password", None)
 
         user = Usuario(**validated_data)
@@ -121,12 +237,19 @@ class UsuarioSerializer(serializers.ModelSerializer):
         if password:
             user.set_password(password)
         else:
-            user.set_password("12345678")
+            user.set_unusable_password()
 
         user.save()
+
+        if conductor_id:
+            conductor = Conductor.objects.get(id=conductor_id)
+            conductor.usuario = user
+            conductor.save()
+
         return user
 
     def update(self, instance, validated_data):
+        conductor_id = validated_data.pop("conductor_id", None)
         password = validated_data.pop("password", None)
 
         for attr, value in validated_data.items():
@@ -136,13 +259,27 @@ class UsuarioSerializer(serializers.ModelSerializer):
             instance.set_password(password)
 
         instance.save()
+
+        if conductor_id:
+            Conductor.objects.filter(usuario=instance).update(usuario=None)
+
+            conductor = Conductor.objects.get(id=conductor_id)
+            conductor.usuario = instance
+            conductor.save()
+
         return instance
 
-
 class ConductorSerializer(serializers.ModelSerializer):
-    sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
-    usuario_username = serializers.CharField(source="usuario.username", read_only=True)
-    usuario_email = serializers.CharField(source="usuario.email", read_only=True)
+    sucursal_nombre = serializers.CharField(
+        source="sucursal.nombre",
+        read_only=True
+    )
+
+    usuario_username = serializers.CharField(
+        source="usuario.username",
+        read_only=True
+    )
+
     nombre_completo = serializers.SerializerMethodField()
 
     class Meta:
@@ -153,7 +290,6 @@ class ConductorSerializer(serializers.ModelSerializer):
             "sucursal_nombre",
             "usuario",
             "usuario_username",
-            "usuario_email",
             "nombre",
             "apellido",
             "nombre_completo",
@@ -162,22 +298,82 @@ class ConductorSerializer(serializers.ModelSerializer):
             "direccion",
             "licencia",
             "vencimiento_licencia",
-            "porcentaje_pago",
             "fecha_registro",
             "activo",
         ]
         read_only_fields = [
-            "id",
+            "fecha_registro",
             "sucursal_nombre",
             "usuario_username",
-            "usuario_email",
             "nombre_completo",
-            "fecha_registro",
         ]
+        extra_kwargs = {
+            "sucursal": {
+                "required": False,
+                "allow_null": True,
+            },
+            "usuario": {
+                "required": False,
+                "allow_null": True,
+            },
+        }
 
     def get_nombre_completo(self, obj):
         return f"{obj.nombre} {obj.apellido}".strip()
 
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = request.user if request else None
+
+        if not user:
+            return attrs
+
+        cedula = attrs.get("cedula", getattr(self.instance, "cedula", None))
+
+        if user.rol and user.rol.codigo == "superadmin":
+            attrs["sucursal"] = None
+
+            if cedula:
+                qs = Conductor.objects.filter(
+                    sucursal__isnull=True,
+                    cedula=cedula
+                )
+
+                if self.instance:
+                    qs = qs.exclude(pk=self.instance.pk)
+
+                if qs.exists():
+                    raise serializers.ValidationError({
+                        "cedula": "Ya existe un conductor del superadmin con esta cédula."
+                    })
+
+            return attrs
+
+        if user.rol and user.rol.codigo == "admin_sucursal":
+            if not user.sucursal:
+                raise serializers.ValidationError({
+                    "sucursal": "Tu usuario no tiene una sucursal asignada."
+                })
+
+            attrs["sucursal"] = user.sucursal
+
+            if cedula:
+                qs = Conductor.objects.filter(
+                    sucursal=user.sucursal,
+                    cedula=cedula
+                )
+
+                if self.instance:
+                    qs = qs.exclude(pk=self.instance.pk)
+
+                if qs.exists():
+                    raise serializers.ValidationError({
+                        "cedula": "Ya existe un conductor con esta cédula en tu sucursal."
+                    })
+
+            return attrs
+
+        return attrs
 
 class VehiculoSerializer(serializers.ModelSerializer):
     sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
@@ -227,6 +423,7 @@ class VehiculoSerializer(serializers.ModelSerializer):
             "alerta_cambio_aceite",
             "alerta_mantenimiento",
         ]
+
         read_only_fields = [
             "id",
             "sucursal_nombre",
@@ -242,6 +439,94 @@ class VehiculoSerializer(serializers.ModelSerializer):
             "alerta_cambio_aceite",
             "alerta_mantenimiento",
         ]
+
+        extra_kwargs = {
+            "sucursal": {
+                "required": False,
+                "allow_null": True,
+            },
+            "estado": {
+                "required": False,
+                "allow_null": True,
+            },
+        }
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = request.user if request else None
+
+        if not user:
+            return attrs
+
+        numero = attrs.get("numero", getattr(self.instance, "numero", None))
+        placa = attrs.get("placa", getattr(self.instance, "placa", None))
+
+        if user.rol and user.rol.codigo == "superadmin":
+            attrs["sucursal"] = None
+
+            if numero:
+                qs = Vehiculo.objects.filter(
+                    sucursal__isnull=True,
+                    numero=numero
+                )
+
+                if self.instance:
+                    qs = qs.exclude(pk=self.instance.pk)
+
+                if qs.exists():
+                    raise serializers.ValidationError({
+                        "numero": "Ya existe un vehículo del superadmin con este número."
+                    })
+
+            if placa:
+                qs_placa = Vehiculo.objects.filter(placa=placa)
+
+                if self.instance:
+                    qs_placa = qs_placa.exclude(pk=self.instance.pk)
+
+                if qs_placa.exists():
+                    raise serializers.ValidationError({
+                        "placa": "Ya existe un vehículo registrado con esta placa."
+                    })
+
+            return attrs
+
+        if user.rol and user.rol.codigo == "admin_sucursal":
+            if not user.sucursal:
+                raise serializers.ValidationError({
+                    "sucursal": "Tu usuario no tiene una sucursal asignada."
+                })
+
+            attrs["sucursal"] = user.sucursal
+
+            if numero:
+                qs = Vehiculo.objects.filter(
+                    sucursal=user.sucursal,
+                    numero=numero
+                )
+
+                if self.instance:
+                    qs = qs.exclude(pk=self.instance.pk)
+
+                if qs.exists():
+                    raise serializers.ValidationError({
+                        "numero": "Ya existe un vehículo con este número en tu sucursal."
+                    })
+
+            if placa:
+                qs_placa = Vehiculo.objects.filter(placa=placa)
+
+                if self.instance:
+                    qs_placa = qs_placa.exclude(pk=self.instance.pk)
+
+                if qs_placa.exists():
+                    raise serializers.ValidationError({
+                        "placa": "Ya existe un vehículo registrado con esta placa."
+                    })
+
+            return attrs
+
+        return attrs
 
     def get_proximo_cambio_aceite(self, obj):
         return obj.km_ultimo_cambio_aceite + obj.km_intervalo_cambio_aceite
@@ -275,6 +560,7 @@ class AsignacionVehiculoSerializer(serializers.ModelSerializer):
     conductor_nombre = serializers.SerializerMethodField()
     vehiculo_placa = serializers.CharField(source="vehiculo.placa", read_only=True)
     vehiculo_numero = serializers.CharField(source="vehiculo.numero", read_only=True)
+    vehiculo_descripcion = serializers.SerializerMethodField()
 
     class Meta:
         model = AsignacionVehiculo
@@ -287,55 +573,119 @@ class AsignacionVehiculoSerializer(serializers.ModelSerializer):
             "vehiculo",
             "vehiculo_placa",
             "vehiculo_numero",
+            "vehiculo_descripcion",
             "fecha_inicio",
             "fecha_fin",
             "activa",
         ]
+
         read_only_fields = [
             "id",
             "sucursal_nombre",
             "conductor_nombre",
             "vehiculo_placa",
             "vehiculo_numero",
+            "vehiculo_descripcion",
         ]
+
+        extra_kwargs = {
+            "sucursal": {
+                "required": False,
+                "allow_null": True,
+            },
+        }
 
     def get_conductor_nombre(self, obj):
         return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
 
+    def get_vehiculo_descripcion(self, obj):
+        return f"{obj.vehiculo.numero} - {obj.vehiculo.placa} - {obj.vehiculo.marca} {obj.vehiculo.modelo}"
+
     def validate(self, attrs):
+        request = self.context.get("request")
+        user = request.user if request else None
+
         conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
         vehiculo = attrs.get("vehiculo", getattr(self.instance, "vehiculo", None))
-        sucursal = attrs.get("sucursal", getattr(self.instance, "sucursal", None))
         activa = attrs.get("activa", getattr(self.instance, "activa", True))
 
-        if conductor and vehiculo and conductor.sucursal_id != vehiculo.sucursal_id:
+        if not conductor:
+            raise serializers.ValidationError({
+                "conductor": "Debes seleccionar un conductor."
+            })
+
+        if not vehiculo:
+            raise serializers.ValidationError({
+                "vehiculo": "Debes seleccionar un vehículo."
+            })
+
+        if not user or not user.rol:
             raise serializers.ValidationError(
-                "El conductor y el vehículo deben pertenecer a la misma sucursal."
+                "No se pudo validar el usuario autenticado."
             )
 
-        if sucursal and conductor and conductor.sucursal_id != sucursal.id:
-            raise serializers.ValidationError(
-                "El conductor no pertenece a la sucursal indicada."
-            )
+        codigo_rol = user.rol.codigo
 
-        if sucursal and vehiculo and vehiculo.sucursal_id != sucursal.id:
+        if codigo_rol == "superadmin":
+            if conductor.sucursal_id is not None:
+                raise serializers.ValidationError({
+                    "conductor": "Desde el panel superadmin solo puedes asignar conductores del superadmin."
+                })
+
+            if vehiculo.sucursal_id is not None:
+                raise serializers.ValidationError({
+                    "vehiculo": "Desde el panel superadmin solo puedes asignar vehículos del superadmin."
+                })
+
+            attrs["sucursal"] = None
+
+        elif codigo_rol == "admin_sucursal":
+            if not user.sucursal:
+                raise serializers.ValidationError({
+                    "sucursal": "Tu usuario no tiene una sucursal asignada."
+                })
+
+            if conductor.sucursal_id != user.sucursal_id:
+                raise serializers.ValidationError({
+                    "conductor": "No puedes asignar conductores de otra sucursal."
+                })
+
+            if vehiculo.sucursal_id != user.sucursal_id:
+                raise serializers.ValidationError({
+                    "vehiculo": "No puedes asignar vehículos de otra sucursal."
+                })
+
+            attrs["sucursal"] = user.sucursal
+
+        else:
             raise serializers.ValidationError(
-                "El vehículo no pertenece a la sucursal indicada."
+                "No tienes permiso para crear asignaciones."
             )
 
         if activa:
-            qs_vehiculo = AsignacionVehiculo.objects.filter(vehiculo=vehiculo, activa=True)
-            qs_conductor = AsignacionVehiculo.objects.filter(conductor=conductor, activa=True)
+            qs_vehiculo = AsignacionVehiculo.objects.filter(
+                vehiculo=vehiculo,
+                activa=True
+            )
+
+            qs_conductor = AsignacionVehiculo.objects.filter(
+                conductor=conductor,
+                activa=True
+            )
 
             if self.instance:
                 qs_vehiculo = qs_vehiculo.exclude(pk=self.instance.pk)
                 qs_conductor = qs_conductor.exclude(pk=self.instance.pk)
 
             if qs_vehiculo.exists():
-                raise serializers.ValidationError("Ese vehículo ya tiene una asignación activa.")
+                raise serializers.ValidationError({
+                    "vehiculo": "Ese vehículo ya tiene una asignación activa."
+                })
 
             if qs_conductor.exists():
-                raise serializers.ValidationError("Ese conductor ya tiene una asignación activa.")
+                raise serializers.ValidationError({
+                    "conductor": "Ese conductor ya tiene una asignación activa."
+                })
 
         return attrs
 
@@ -455,6 +805,7 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
     conductor_nombre = serializers.SerializerMethodField()
     vehiculo_placa = serializers.CharField(source="vehiculo.placa", read_only=True)
     vehiculo_numero = serializers.CharField(source="vehiculo.numero", read_only=True)
+    vehiculo_descripcion = serializers.SerializerMethodField()
     estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
     estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
 
@@ -476,6 +827,7 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "vehiculo",
             "vehiculo_placa",
             "vehiculo_numero",
+            "vehiculo_descripcion",
             "kilometraje_inicial",
             "kilometraje_final",
             "kilometros_recorridos",
@@ -492,6 +844,7 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "gastos",
             "adelantos",
         ]
+
         read_only_fields = [
             "id",
             "sucursal_nombre",
@@ -500,6 +853,7 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "conductor_nombre",
             "vehiculo_placa",
             "vehiculo_numero",
+            "vehiculo_descripcion",
             "kilometros_recorridos",
             "pago_conductor",
             "total_adelantos",
@@ -512,14 +866,32 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "adelantos",
         ]
 
+        extra_kwargs = {
+            "sucursal": {
+                "required": False,
+                "allow_null": True,
+            },
+            "estado": {
+                "required": False,
+                "allow_null": True,
+            },
+        }
+
     def get_conductor_nombre(self, obj):
         return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
 
+    def get_vehiculo_descripcion(self, obj):
+        return f"{obj.vehiculo.numero} - {obj.vehiculo.placa} - {obj.vehiculo.marca} {obj.vehiculo.modelo}"
+
     def validate(self, attrs):
+        request = self.context.get("request")
+        user = request.user if request else None
+
         kilometraje_inicial = attrs.get(
             "kilometraje_inicial",
             getattr(self.instance, "kilometraje_inicial", None)
         )
+
         kilometraje_final = attrs.get(
             "kilometraje_final",
             getattr(self.instance, "kilometraje_final", None)
@@ -527,25 +899,106 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
 
         if kilometraje_inicial is not None and kilometraje_final is not None:
             if kilometraje_final < kilometraje_inicial:
-                raise serializers.ValidationError(
-                    "El kilometraje final no puede ser menor al kilometraje inicial."
-                )
+                raise serializers.ValidationError({
+                    "kilometraje_final": "El kilometraje final no puede ser menor al kilometraje inicial."
+                })
 
         conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
         vehiculo = attrs.get("vehiculo", getattr(self.instance, "vehiculo", None))
-        sucursal = attrs.get("sucursal", getattr(self.instance, "sucursal", None))
 
-        if conductor and vehiculo:
+        if not user or not user.rol:
+            raise serializers.ValidationError(
+                "No se pudo validar el usuario autenticado."
+            )
+
+        codigo_rol = user.rol.codigo
+
+        if codigo_rol == "taxista":
+            try:
+                conductor_usuario = user.perfil_conductor
+            except Conductor.DoesNotExist:
+                raise serializers.ValidationError({
+                    "conductor": "Este usuario no tiene perfil de conductor."
+                })
+
+            conductor = conductor_usuario
+            attrs["conductor"] = conductor_usuario
+
+        if not conductor:
+            raise serializers.ValidationError({
+                "conductor": "Debes seleccionar un conductor."
+            })
+
+        if not vehiculo:
+            raise serializers.ValidationError({
+                "vehiculo": "Debes seleccionar un vehículo."
+            })
+
+        if codigo_rol == "superadmin":
+            if conductor.sucursal_id is not None:
+                raise serializers.ValidationError({
+                    "conductor": "Desde el panel superadmin solo puedes registrar jornadas para conductores del superadmin."
+                })
+
+            if vehiculo.sucursal_id is not None:
+                raise serializers.ValidationError({
+                    "vehiculo": "Desde el panel superadmin solo puedes registrar jornadas para vehículos del superadmin."
+                })
+
+            attrs["sucursal"] = None
+
+        elif codigo_rol == "admin_sucursal":
+            if not user.sucursal:
+                raise serializers.ValidationError({
+                    "sucursal": "Tu usuario no tiene una sucursal asignada."
+                })
+
+            if conductor.sucursal_id != user.sucursal_id:
+                raise serializers.ValidationError({
+                    "conductor": "No puedes registrar jornadas para conductores de otra sucursal."
+                })
+
+            if vehiculo.sucursal_id != user.sucursal_id:
+                raise serializers.ValidationError({
+                    "vehiculo": "No puedes registrar jornadas para vehículos de otra sucursal."
+                })
+
+            attrs["sucursal"] = user.sucursal
+
+        elif codigo_rol == "taxista":
+            if conductor.usuario_id != user.id:
+                raise serializers.ValidationError({
+                    "conductor": "No puedes registrar jornadas para otro conductor."
+                })
+
             if conductor.sucursal_id != vehiculo.sucursal_id:
-                raise serializers.ValidationError(
-                    "El conductor y el vehículo deben pertenecer a la misma sucursal."
-                )
+                raise serializers.ValidationError({
+                    "vehiculo": "El vehículo no pertenece al mismo entorno que el conductor."
+                })
 
-        if sucursal and conductor and sucursal.id != conductor.sucursal_id:
-            raise serializers.ValidationError("El conductor no pertenece a la sucursal indicada.")
+            attrs["sucursal"] = conductor.sucursal
 
-        if sucursal and vehiculo and sucursal.id != vehiculo.sucursal_id:
-            raise serializers.ValidationError("El vehículo no pertenece a la sucursal indicada.")
+        else:
+            raise serializers.ValidationError(
+                "No tienes permiso para registrar jornadas."
+            )
+
+        asignacion_activa = AsignacionVehiculo.objects.filter(
+            conductor=conductor,
+            vehiculo=vehiculo,
+            activa=True
+        )
+
+        if codigo_rol == "superadmin":
+            asignacion_activa = asignacion_activa.filter(sucursal__isnull=True)
+
+        elif codigo_rol in ["admin_sucursal", "taxista"]:
+            asignacion_activa = asignacion_activa.filter(sucursal=conductor.sucursal)
+
+        if not asignacion_activa.exists():
+            raise serializers.ValidationError({
+                "vehiculo": "El conductor no tiene una asignación activa con ese vehículo."
+            })
 
         return attrs
 
