@@ -405,6 +405,14 @@ class JornadaDiaria(models.Model):
     observaciones = models.TextField(blank=True, null=True)
     fecha_registro = models.DateTimeField(auto_now_add=True)
 
+    liquidacion = models.ForeignKey(
+        'LiquidacionConductor',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='jornadas'
+    )
+
     class Meta:
         verbose_name = "Jornada diaria"
         verbose_name_plural = "Jornadas diarias"
@@ -621,3 +629,31 @@ class ConfiguracionSistema(models.Model):
         if self.sucursal:
             return f"Configuración - {self.sucursal.nombre}"
         return "Configuración global"
+
+
+class LiquidacionConductor(models.Model):
+    conductor = models.ForeignKey(
+        'Conductor',
+        on_delete=models.PROTECT,
+        related_name='liquidaciones'
+    )
+    sucursal = models.ForeignKey(
+        'Sucursal',
+        on_delete=models.SET_NULL,
+        null=True
+    )
+    fecha_inicio = models.DateField()
+    fecha_fin = models.DateField()
+    total_jornadas = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_adelantos_pendientes = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    ajuste_manual = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_pago = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    notas = models.TextField(blank=True, null=True)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Liquidación'
+        ordering = ['-fecha_creacion']
+
+    def __str__(self):
+        return f"Liquidación {self.conductor} ({self.fecha_inicio} - {self.fecha_fin})"

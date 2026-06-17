@@ -20,6 +20,7 @@ from .views import (
     JornadaDiariaViewSet,
     GastoViewSet,
     AdelantoViewSet,
+    LiquidacionConductorViewSet,
     MantenimientoViewSet,
     ConfiguracionSistemaView,
     DashboardResumenView,
@@ -48,6 +49,7 @@ router.register(r"asignaciones", AsignacionVehiculoViewSet, basename="asignacion
 router.register(r"jornadas", JornadaDiariaViewSet, basename="jornadas")
 router.register(r"gastos", GastoViewSet, basename="gastos")
 router.register(r"adelantos", AdelantoViewSet, basename="adelantos")
+router.register(r"liquidaciones", LiquidacionConductorViewSet, basename="liquidaciones")
 router.register(r"mantenimientos", MantenimientoViewSet, basename="mantenimientos")
 
 urlpatterns = [

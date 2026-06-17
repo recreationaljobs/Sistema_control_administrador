@@ -32,6 +32,7 @@ from ..models import (
     Adelanto,
     Mantenimiento,
     ConfiguracionSistema,
+    LiquidacionConductor,
 )
 
 from .serializers import (
@@ -53,6 +54,7 @@ from .serializers import (
     AdelantoSerializer,
     MantenimientoSerializer,
     ConfiguracionSistemaSerializer,
+    LiquidacionConductorSerializer,
 )
 
 from .permissions import (
@@ -1068,6 +1070,113 @@ class AdelantoViewSet(viewsets.ModelViewSet):
 </html>"""
 
         return HttpResponse(html, content_type="text/html")
+
+
+class LiquidacionConductorViewSet(viewsets.ModelViewSet):
+    serializer_class = LiquidacionConductorSerializer
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [EsAdminSucursalOSuperAdmin()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = LiquidacionConductor.objects.select_related(
+            "conductor",
+            "sucursal"
+        ).all()
+
+        if es_superadmin(user):
+            return qs
+
+        if es_admin_sucursal(user):
+            return qs.filter(sucursal=user.sucursal)
+
+        if es_taxista(user):
+            return qs.filter(conductor__usuario=user)
+
+        return qs.none()
+
+    def perform_create(self, serializer):
+        liq = serializer.save()
+
+        # Bloquear todas las jornadas del rango asignándoles esta liquidación
+        JornadaDiaria.objects.filter(
+            conductor=liq.conductor,
+            fecha__gte=liq.fecha_inicio,
+            fecha__lte=liq.fecha_fin,
+            liquidacion__isnull=True
+        ).update(liquidacion=liq)
+
+    @action(detail=False, methods=['get'], url_path='preview')
+    def preview(self, request):
+        conductor_id = request.query_params.get('conductor_id')
+        fecha_inicio = request.query_params.get('fecha_inicio')
+        fecha_fin = request.query_params.get('fecha_fin')
+
+        if not (conductor_id and fecha_inicio and fecha_fin):
+            return Response(
+                {"detail": "conductor_id, fecha_inicio y fecha_fin son obligatorios."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Jornadas del conductor en el rango que aún NO están liquidadas
+        jornadas = JornadaDiaria.objects.filter(
+            conductor_id=conductor_id,
+            fecha__gte=fecha_inicio,
+            fecha__lte=fecha_fin,
+            liquidacion__isnull=True
+        ).order_by('fecha')
+
+        total_jornadas = sum(
+            (j.pago_conductor for j in jornadas),
+            Decimal("0.00")
+        )
+
+        # Adelantos pendientes del conductor (adelantos - abonos)
+        adelantos = Adelanto.objects.filter(conductor_id=conductor_id, tipo='ADELANTO')
+        abonos = Adelanto.objects.filter(conductor_id=conductor_id, tipo='ABONO')
+        total_adelantos = sum((a.monto for a in adelantos), Decimal("0.00"))
+        total_abonos = sum((a.monto for a in abonos), Decimal("0.00"))
+        pendiente_adelantos = max(total_adelantos - total_abonos, Decimal("0.00"))
+
+        return Response({
+            'jornadas': [
+                {'id': j.id, 'fecha': j.fecha, 'monto': j.pago_conductor}
+                for j in jornadas
+            ],
+            'total_jornadas': total_jornadas,
+            'pendiente_adelantos': pendiente_adelantos,
+            'total_sugerido': total_jornadas - pendiente_adelantos,
+            'jornadas_count': jornadas.count()
+        })
+
+    @action(detail=True, methods=['get'], url_path='recibo')
+    def recibo(self, request, pk=None):
+        liq = self.get_object()
+        jornadas = liq.jornadas.all().order_by('fecha')
+        filas = ''.join([
+            f"<tr><td>{j.fecha}</td><td>C$ {j.pago_conductor}</td></tr>"
+            for j in jornadas
+        ])
+        html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Liquidación</title>
+    <style>body{{font-family:Arial;max-width:500px;margin:40px auto;padding:20px}}
+    table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #ccc;padding:6px}}
+    .total{{font-size:1.2em;font-weight:bold}}@media print{{button{{display:none}}}}</style></head>
+    <body><h2>Recibo de Liquidación — TaxiAdmin</h2>
+    <p><b>Conductor:</b> {liq.conductor.nombre} {liq.conductor.apellido}</p>
+    <p><b>Período:</b> {liq.fecha_inicio} al {liq.fecha_fin}</p>
+    <table><tr><th>Fecha</th><th>Ganancia conductor</th></tr>{filas}</table>
+    <br>
+    <p>Total jornadas: C$ {liq.total_jornadas}</p>
+    <p>Adelantos pendientes: - C$ {liq.total_adelantos_pendientes}</p>
+    <p>Ajuste manual: C$ {liq.ajuste_manual}</p>
+    <p class="total">TOTAL A PAGAR: C$ {liq.total_pago}</p>
+    <p>Notas: {liq.notas or '—'}</p>
+    <br><button onclick="window.print()">🖨 Imprimir</button>
+    </body></html>"""
+        return HttpResponse(html)
 
 
 class MantenimientoViewSet(viewsets.ModelViewSet):

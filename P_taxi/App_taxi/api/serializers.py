@@ -19,6 +19,7 @@ from ..models import (
     Adelanto,
     Mantenimiento,
     ConfiguracionSistema,
+    LiquidacionConductor,
 )
 
 
@@ -1057,3 +1058,35 @@ class ConfiguracionSistemaSerializer(serializers.ModelSerializer):
             "moneda",
         ]
         read_only_fields = ["id", "sucursal_nombre"]
+
+
+class LiquidacionConductorSerializer(serializers.ModelSerializer):
+    conductor_nombre = serializers.SerializerMethodField()
+    sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
+
+    class Meta:
+        model = LiquidacionConductor
+        fields = [
+            "id",
+            "conductor",
+            "conductor_nombre",
+            "sucursal",
+            "sucursal_nombre",
+            "fecha_inicio",
+            "fecha_fin",
+            "total_jornadas",
+            "total_adelantos_pendientes",
+            "ajuste_manual",
+            "total_pago",
+            "notas",
+            "fecha_creacion",
+        ]
+        read_only_fields = [
+            "id",
+            "conductor_nombre",
+            "sucursal_nombre",
+            "fecha_creacion",
+        ]
+
+    def get_conductor_nombre(self, obj):
+        return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
