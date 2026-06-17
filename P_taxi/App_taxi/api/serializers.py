@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from decimal import Decimal
+from django.db.models import Sum
 
 from ..models import (
     Sucursal,
@@ -31,49 +33,49 @@ class SucursalSerializer(serializers.ModelSerializer):
 class RolSerializer(serializers.ModelSerializer):
     class Meta:
         model = Rol
-        fields = ["id", "nombre", "codigo"]
+        fields = ["id", "nombre", "codigo", "activo"]
 
 
 class EstadoVehiculoSerializer(serializers.ModelSerializer):
     class Meta:
         model = EstadoVehiculo
-        fields = ["id", "nombre", "codigo"]
+        fields = ["id", "nombre", "codigo", "activo"]
 
 
 class EstadoJornadaSerializer(serializers.ModelSerializer):
     class Meta:
         model = EstadoJornada
-        fields = ["id", "nombre", "codigo"]
+        fields = ["id", "nombre", "codigo", "activo"]
 
 
 class TipoGastoSerializer(serializers.ModelSerializer):
     class Meta:
         model = TipoGasto
-        fields = ["id", "nombre", "codigo"]
+        fields = ["id", "nombre", "codigo", "activo"]
 
 
 class EstadoGastoSerializer(serializers.ModelSerializer):
     class Meta:
         model = EstadoGasto
-        fields = ["id", "nombre", "codigo"]
+        fields = ["id", "nombre", "codigo", "activo"]
 
 
 class EstadoAdelantoSerializer(serializers.ModelSerializer):
     class Meta:
         model = EstadoAdelanto
-        fields = ["id", "nombre", "codigo"]
+        fields = ["id", "nombre", "codigo", "activo"]
 
 
 class TipoMantenimientoSerializer(serializers.ModelSerializer):
     class Meta:
         model = TipoMantenimiento
-        fields = ["id", "nombre", "codigo"]
+        fields = ["id", "nombre", "codigo", "activo"]
 
 
 class EstadoMantenimientoSerializer(serializers.ModelSerializer):
     class Meta:
         model = EstadoMantenimiento
-        fields = ["id", "nombre", "codigo"]
+        fields = ["id", "nombre", "codigo", "activo"]
 
 
 from rest_framework import serializers
@@ -692,8 +694,9 @@ class AsignacionVehiculoSerializer(serializers.ModelSerializer):
 
 class GastoSerializer(serializers.ModelSerializer):
     sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
-    conductor_nombre = serializers.SerializerMethodField()
     vehiculo_placa = serializers.CharField(source="vehiculo.placa", read_only=True)
+    vehiculo_numero = serializers.CharField(source="vehiculo.numero", read_only=True)
+    vehiculo_descripcion = serializers.SerializerMethodField()
     tipo_gasto_nombre = serializers.CharField(source="tipo_gasto.nombre", read_only=True)
     estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
     estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
@@ -707,8 +710,9 @@ class GastoSerializer(serializers.ModelSerializer):
             "jornada",
             "vehiculo",
             "vehiculo_placa",
+            "vehiculo_numero",
+            "vehiculo_descripcion",
             "conductor",
-            "conductor_nombre",
             "tipo_gasto",
             "tipo_gasto_nombre",
             "estado",
@@ -718,38 +722,95 @@ class GastoSerializer(serializers.ModelSerializer):
             "monto",
             "fecha",
         ]
+
         read_only_fields = [
             "id",
+            "sucursal",
             "sucursal_nombre",
+            "jornada",
+            "conductor",
             "vehiculo_placa",
-            "conductor_nombre",
+            "vehiculo_numero",
+            "vehiculo_descripcion",
             "tipo_gasto_nombre",
             "estado_nombre",
             "estado_codigo",
         ]
 
-    def get_conductor_nombre(self, obj):
-        if not obj.conductor:
+        extra_kwargs = {
+            "tipo_gasto": {
+                "required": False,
+                "allow_null": True,
+            },
+            "estado": {
+                "required": False,
+                "allow_null": True,
+            },
+        }
+
+    def get_vehiculo_descripcion(self, obj):
+        if not obj.vehiculo:
             return None
-        return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
+
+        return (
+            f"{obj.vehiculo.numero} - {obj.vehiculo.placa} - "
+            f"{obj.vehiculo.marca} {obj.vehiculo.modelo}"
+        )
 
     def validate(self, attrs):
-        jornada = attrs.get("jornada", getattr(self.instance, "jornada", None))
+        request = self.context.get("request")
+        user = request.user if request else None
+
         vehiculo = attrs.get("vehiculo", getattr(self.instance, "vehiculo", None))
-        conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
-        sucursal = attrs.get("sucursal", getattr(self.instance, "sucursal", None))
+        monto = attrs.get("monto", getattr(self.instance, "monto", None))
 
-        if jornada:
-            if vehiculo and vehiculo.id != jornada.vehiculo_id:
-                raise serializers.ValidationError("El vehículo no coincide con la jornada.")
+        if monto is not None and monto < Decimal("0.00"):
+            raise serializers.ValidationError({
+                "monto": "El monto no puede ser negativo."
+            })
 
-            if conductor and conductor.id != jornada.conductor_id:
-                raise serializers.ValidationError("El conductor no coincide con la jornada.")
+        if not user or not user.rol:
+            raise serializers.ValidationError(
+                "No se pudo validar el usuario autenticado."
+            )
 
-            if sucursal and sucursal.id != jornada.sucursal_id:
-                raise serializers.ValidationError("La sucursal no coincide con la jornada.")
+        codigo_rol = user.rol.codigo
 
-        return attrs
+        if not vehiculo:
+            raise serializers.ValidationError({
+                "vehiculo": "Debes seleccionar un vehículo."
+            })
+
+        if codigo_rol in ["superadmin", "super_admin"]:
+            if vehiculo.sucursal_id is not None:
+                raise serializers.ValidationError({
+                    "vehiculo": "Desde el panel superadmin solo puedes registrar gastos para vehículos del superadmin."
+                })
+
+            attrs["sucursal"] = None
+            attrs["jornada"] = None
+            attrs["conductor"] = None
+            return attrs
+
+        if codigo_rol == "admin_sucursal":
+            if not user.sucursal:
+                raise serializers.ValidationError({
+                    "sucursal": "Tu usuario no tiene una sucursal asignada."
+                })
+
+            if vehiculo.sucursal_id != user.sucursal_id:
+                raise serializers.ValidationError({
+                    "vehiculo": "No puedes registrar gastos para vehículos de otra sucursal."
+                })
+
+            attrs["sucursal"] = user.sucursal
+            attrs["jornada"] = None
+            attrs["conductor"] = None
+            return attrs
+
+        raise serializers.ValidationError(
+            "No tienes permiso para registrar gastos."
+        )
 
 
 class AdelantoSerializer(serializers.ModelSerializer):
@@ -812,6 +873,11 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
     gastos = GastoSerializer(many=True, read_only=True)
     adelantos = AdelantoSerializer(many=True, read_only=True)
 
+    gastos_vehiculo = serializers.SerializerMethodField()
+    mantenimiento_vehiculo = serializers.SerializerMethodField()
+    gastos_operativos = serializers.SerializerMethodField()
+    ganancia_real_dueno = serializers.SerializerMethodField()
+
     class Meta:
         model = JornadaDiaria
         fields = [
@@ -831,7 +897,9 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "kilometraje_inicial",
             "kilometraje_final",
             "kilometros_recorridos",
+            "tipo_cobro",
             "ingreso_bruto",
+            "monto_alquiler",
             "porcentaje_pago_conductor",
             "pago_conductor",
             "total_adelantos",
@@ -839,6 +907,10 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "saldo_adelanto_excedente",
             "total_gastos",
             "ganancia_dueno",
+            "gastos_vehiculo",
+            "mantenimiento_vehiculo",
+            "gastos_operativos",
+            "ganancia_real_dueno",
             "observaciones",
             "fecha_registro",
             "gastos",
@@ -861,6 +933,10 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "saldo_adelanto_excedente",
             "total_gastos",
             "ganancia_dueno",
+            "gastos_vehiculo",
+            "mantenimiento_vehiculo",
+            "gastos_operativos",
+            "ganancia_real_dueno",
             "fecha_registro",
             "gastos",
             "adelantos",
@@ -875,13 +951,60 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
                 "required": False,
                 "allow_null": True,
             },
+            "kilometraje_final": {
+                "required": False,
+                "allow_null": True,
+            },
+            "ingreso_bruto": {
+                "required": False,
+            },
+            "monto_alquiler": {
+                "required": False,
+            },
+            "tipo_cobro": {
+                "required": False,
+            },
         }
 
     def get_conductor_nombre(self, obj):
         return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
 
     def get_vehiculo_descripcion(self, obj):
-        return f"{obj.vehiculo.numero} - {obj.vehiculo.placa} - {obj.vehiculo.marca} {obj.vehiculo.modelo}"
+        return (
+            f"{obj.vehiculo.numero} - {obj.vehiculo.placa} - "
+            f"{obj.vehiculo.marca} {obj.vehiculo.modelo}"
+        )
+
+    def get_gastos_vehiculo(self, obj):
+        total = Gasto.objects.filter(
+            vehiculo=obj.vehiculo,
+            fecha=obj.fecha,
+        ).aggregate(total=Sum("monto"))["total"]
+
+        return total or Decimal("0.00")
+
+    def get_mantenimiento_vehiculo(self, obj):
+        total = Mantenimiento.objects.filter(
+            vehiculo=obj.vehiculo,
+            fecha=obj.fecha,
+        ).aggregate(total=Sum("costo"))["total"]
+
+        return total or Decimal("0.00")
+
+    def get_gastos_operativos(self, obj):
+        return self.get_gastos_vehiculo(obj) + self.get_mantenimiento_vehiculo(obj)
+
+    def get_ganancia_real_dueno(self, obj):
+        ingreso_bruto = obj.ingreso_bruto or Decimal("0.00")
+        pago_conductor = obj.pago_conductor or Decimal("0.00")
+        gastos_operativos = self.get_gastos_operativos(obj)
+
+        ganancia = ingreso_bruto - pago_conductor - gastos_operativos
+
+        if ganancia < Decimal("0.00"):
+            return Decimal("0.00")
+
+        return ganancia
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -934,7 +1057,7 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
                 "vehiculo": "Debes seleccionar un vehículo."
             })
 
-        if codigo_rol == "superadmin":
+        if codigo_rol in ["superadmin", "super_admin"]:
             if conductor.sucursal_id is not None:
                 raise serializers.ValidationError({
                     "conductor": "Desde el panel superadmin solo puedes registrar jornadas para conductores del superadmin."
@@ -989,7 +1112,7 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             activa=True
         )
 
-        if codigo_rol == "superadmin":
+        if codigo_rol in ["superadmin", "super_admin"]:
             asignacion_activa = asignacion_activa.filter(sucursal__isnull=True)
 
         elif codigo_rol in ["admin_sucursal", "taxista"]:
@@ -1001,7 +1124,6 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             })
 
         return attrs
-
 
 class MantenimientoSerializer(serializers.ModelSerializer):
     sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)

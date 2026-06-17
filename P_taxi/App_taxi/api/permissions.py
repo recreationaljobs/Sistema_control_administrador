@@ -12,15 +12,35 @@ def rol_codigo(user):
 
 
 def es_superadmin(user):
-    return user.is_authenticated and rol_codigo(user) == "superadmin"
+    return (
+        user
+        and user.is_authenticated
+        and rol_codigo(user) in ["superadmin", "super_admin"]
+    )
 
 
 def es_admin_sucursal(user):
-    return user.is_authenticated and rol_codigo(user) == "admin_sucursal"
+    return (
+        user
+        and user.is_authenticated
+        and rol_codigo(user) == "admin_sucursal"
+    )
 
 
 def es_taxista(user):
-    return user.is_authenticated and rol_codigo(user) == "taxista"
+    return (
+        user
+        and user.is_authenticated
+        and rol_codigo(user) == "taxista"
+    )
+
+
+def es_usuario_sistema(user):
+    return (
+        user
+        and user.is_authenticated
+        and rol_codigo(user) == "usuario_sistema"
+    )
 
 
 def es_admin_o_superadmin(user):

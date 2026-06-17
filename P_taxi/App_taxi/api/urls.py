@@ -2,6 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    DashboardFinancieroView,
     LoginView,
     MiPerfilView,
     SucursalViewSet,
@@ -54,8 +55,17 @@ urlpatterns = [
     path("", include(router.urls)),
     path("login/", LoginView.as_view(), name="login"),
     path("me/", MiPerfilView.as_view(), name="mi-perfil"),
-    path("configuracion/", ConfiguracionSistemaView.as_view(), name="configuracion-sistema"),
+   path(
+    "configuracion-sistema/",
+    ConfiguracionSistemaView.as_view(),
+    name="configuracion-sistema"
+),
     path("dashboard/resumen/", DashboardResumenView.as_view(), name="dashboard-resumen"),
+    path(
+    "dashboard/financiero/",
+    DashboardFinancieroView.as_view(),
+    name="dashboard-financiero",
+),
     path("reportes/financiero/", ReporteFinancieroView.as_view(), name="reporte-financiero"),
     path("reportes/kilometraje/", ReporteKilometrajeView.as_view(), name="reporte-kilometraje"),
     path("mantenimiento/alertas/", AlertasMantenimientoView.as_view(), name="alertas-mantenimiento"),

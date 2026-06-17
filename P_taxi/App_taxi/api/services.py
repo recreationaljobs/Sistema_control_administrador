@@ -42,61 +42,88 @@ def obtener_rango_periodo(periodo):
 
 def calcular_campos_jornada(
     kilometraje_inicial,
-    kilometraje_final,
-    ingreso_bruto,
-    porcentaje_pago_conductor
+    kilometraje_final=None,
+    ingreso_bruto="0.00",
+    porcentaje_pago_conductor="0.00",
+    tipo_cobro="porcentaje",
+    monto_alquiler="0.00",
 ):
-    if kilometraje_final < kilometraje_inicial:
-        raise ValidationError("El kilometraje final no puede ser menor al kilometraje inicial.")
-
-    kilometros_recorridos = kilometraje_final - kilometraje_inicial
-
     ingreso_bruto = Decimal(ingreso_bruto or "0.00")
     porcentaje = Decimal(porcentaje_pago_conductor or "0.00")
+    monto_alquiler = Decimal(monto_alquiler or "0.00")
 
-    pago_conductor = (ingreso_bruto * porcentaje / Decimal("100")).quantize(Decimal("0.01"))
+    if kilometraje_final is None:
+        kilometros_recorridos = 0
+    else:
+        if kilometraje_final < kilometraje_inicial:
+            raise ValidationError(
+                "El kilometraje final no puede ser menor al kilometraje inicial."
+            )
+
+        kilometros_recorridos = kilometraje_final - kilometraje_inicial
+
+    if tipo_cobro == "alquiler":
+        return {
+            "kilometros_recorridos": kilometros_recorridos,
+            "pago_conductor": Decimal("0.00"),
+            "ingreso_bruto": monto_alquiler,
+        }
+
+    pago_conductor = (
+        ingreso_bruto * porcentaje / Decimal("100")
+    ).quantize(Decimal("0.01"))
 
     return {
         "kilometros_recorridos": kilometros_recorridos,
         "pago_conductor": pago_conductor,
+        "ingreso_bruto": ingreso_bruto,
     }
 
 
 def recalcular_totales_jornada(jornada):
-    total_gastos = jornada.gastos.exclude(
-        estado__codigo="anulado"
-    ).aggregate(
-        total=Sum("monto")
-    )["total"] or Decimal("0.00")
-
     total_adelantos = jornada.adelantos.exclude(
         estado__codigo="anulado"
     ).aggregate(
         total=Sum("monto")
     )["total"] or Decimal("0.00")
 
-    pago_pendiente = Decimal(jornada.pago_conductor) - Decimal(total_adelantos)
-    saldo_excedente = Decimal("0.00")
+    tipo_cobro = getattr(jornada, "tipo_cobro", "porcentaje")
 
-    if pago_pendiente < 0:
-        saldo_excedente = abs(pago_pendiente)
+    if tipo_cobro == "alquiler":
+        ingreso_bruto = Decimal(jornada.monto_alquiler or "0.00")
+        pago_conductor = Decimal("0.00")
         pago_pendiente = Decimal("0.00")
+        saldo_excedente = Decimal("0.00")
+        ganancia_dueno = ingreso_bruto.quantize(Decimal("0.01"))
 
-    ganancia_dueno = (
-        Decimal(jornada.ingreso_bruto)
-        - Decimal(jornada.pago_conductor)
-        - Decimal(total_gastos)
-    ).quantize(Decimal("0.01"))
+    else:
+        ingreso_bruto = Decimal(jornada.ingreso_bruto or "0.00")
+        pago_conductor = Decimal(jornada.pago_conductor or "0.00")
+
+        pago_pendiente = pago_conductor - Decimal(total_adelantos)
+        saldo_excedente = Decimal("0.00")
+
+        if pago_pendiente < 0:
+            saldo_excedente = abs(pago_pendiente)
+            pago_pendiente = Decimal("0.00")
+
+        ganancia_dueno = (
+            ingreso_bruto - pago_conductor
+        ).quantize(Decimal("0.01"))
 
     JornadaDiaria.objects.filter(pk=jornada.pk).update(
-        total_gastos=total_gastos,
+        ingreso_bruto=ingreso_bruto,
+        pago_conductor=pago_conductor,
+        total_gastos=Decimal("0.00"),
         total_adelantos=total_adelantos,
         pago_pendiente_conductor=pago_pendiente,
         saldo_adelanto_excedente=saldo_excedente,
-        ganancia_dueno=ganancia_dueno
+        ganancia_dueno=ganancia_dueno,
     )
 
-    jornada.total_gastos = total_gastos
+    jornada.ingreso_bruto = ingreso_bruto
+    jornada.pago_conductor = pago_conductor
+    jornada.total_gastos = Decimal("0.00")
     jornada.total_adelantos = total_adelantos
     jornada.pago_pendiente_conductor = pago_pendiente
     jornada.saldo_adelanto_excedente = saldo_excedente
@@ -106,10 +133,12 @@ def recalcular_totales_jornada(jornada):
 
 
 def actualizar_kilometraje_vehiculo(vehiculo, kilometraje_final):
+    if kilometraje_final is None:
+        return
+
     if kilometraje_final > vehiculo.kilometraje_actual:
         vehiculo.kilometraje_actual = kilometraje_final
         vehiculo.save(update_fields=["kilometraje_actual"])
-
 
 def aplicar_mantenimiento_en_vehiculo(mantenimiento):
     vehiculo = mantenimiento.vehiculo

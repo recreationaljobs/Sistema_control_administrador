@@ -28,6 +28,7 @@ class Sucursal(models.Model):
 class Rol(models.Model):
     nombre = models.CharField(max_length=80)
     codigo = models.CharField(max_length=50, unique=True)
+    activo = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = "Rol"
@@ -70,6 +71,7 @@ class Usuario(AbstractUser):
 class EstadoVehiculo(models.Model):
     nombre = models.CharField(max_length=50)
     codigo = models.CharField(max_length=50, unique=True)
+    activo = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = "Estado de vehículo"
@@ -83,6 +85,8 @@ class EstadoVehiculo(models.Model):
 class EstadoJornada(models.Model):
     nombre = models.CharField(max_length=50)
     codigo = models.CharField(max_length=50, unique=True)
+    activo = models.BooleanField(default=True)
+
 
     class Meta:
         verbose_name = "Estado de jornada"
@@ -96,6 +100,7 @@ class EstadoJornada(models.Model):
 class TipoGasto(models.Model):
     nombre = models.CharField(max_length=80)
     codigo = models.CharField(max_length=50, unique=True)
+    activo = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = "Tipo de gasto"
@@ -109,7 +114,7 @@ class TipoGasto(models.Model):
 class EstadoGasto(models.Model):
     nombre = models.CharField(max_length=50)
     codigo = models.CharField(max_length=50, unique=True)
-
+    activo = models.BooleanField(default=True)
     class Meta:
         verbose_name = "Estado de gasto"
         verbose_name_plural = "Estados de gastos"
@@ -122,6 +127,7 @@ class EstadoGasto(models.Model):
 class EstadoAdelanto(models.Model):
     nombre = models.CharField(max_length=50)
     codigo = models.CharField(max_length=50, unique=True)
+    activo = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = "Estado de adelanto"
@@ -135,6 +141,7 @@ class EstadoAdelanto(models.Model):
 class TipoMantenimiento(models.Model):
     nombre = models.CharField(max_length=80)
     codigo = models.CharField(max_length=50, unique=True)
+    activo = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = "Tipo de mantenimiento"
@@ -148,6 +155,7 @@ class TipoMantenimiento(models.Model):
 class EstadoMantenimiento(models.Model):
     nombre = models.CharField(max_length=50)
     codigo = models.CharField(max_length=50, unique=True)
+    activo = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = "Estado de mantenimiento"
@@ -342,15 +350,38 @@ class JornadaDiaria(models.Model):
         related_name="jornadas"
     )
 
+    TIPO_COBRO_CHOICES = [
+        ("porcentaje", "Porcentaje"),
+        ("alquiler", "Alquiler"),
+    ]
+
     kilometraje_inicial = models.PositiveIntegerField()
-    kilometraje_final = models.PositiveIntegerField()
+
+    kilometraje_final = models.PositiveIntegerField(
+    blank=True,
+    null=True
+)
+
     kilometros_recorridos = models.PositiveIntegerField(default=0)
 
+    tipo_cobro = models.CharField(
+    max_length=20,
+    choices=TIPO_COBRO_CHOICES,
+    default="porcentaje"
+)
+
     ingreso_bruto = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=Decimal("0.00")
-    )
+    max_digits=12,
+    decimal_places=2,
+    default=Decimal("0.00")
+)
+
+    monto_alquiler = models.DecimalField(
+    max_digits=12,
+    decimal_places=2,
+    default=Decimal("0.00"),
+    validators=[MinValueValidator(Decimal("0.00"))]
+)
 
     porcentaje_pago_conductor = models.DecimalField(
         max_digits=5,
@@ -420,6 +451,8 @@ class Gasto(models.Model):
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,
+        blank=True,
+        null=True,
         related_name="gastos"
     )
 
