@@ -182,6 +182,10 @@ class Conductor(models.Model):
     licencia = models.CharField(max_length=50)
     vencimiento_licencia = models.DateField(blank=True, null=True)
 
+    numero_licencia = models.CharField(max_length=50, blank=True, null=True)
+    fecha_inicio_licencia = models.DateField(blank=True, null=True)
+    fecha_vencimiento_licencia = models.DateField(blank=True, null=True)
+
     porcentaje_pago = models.DecimalField(
         max_digits=5,
         decimal_places=2,
@@ -401,6 +405,14 @@ class JornadaDiaria(models.Model):
     observaciones = models.TextField(blank=True, null=True)
     fecha_registro = models.DateTimeField(auto_now_add=True)
 
+    liquidacion = models.ForeignKey(
+        'LiquidacionConductor',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='jornadas'
+    )
+
     class Meta:
         verbose_name = "Jornada diaria"
         verbose_name_plural = "Jornadas diarias"
@@ -482,14 +494,15 @@ class Gasto(models.Model):
 
 
 class Adelanto(models.Model):
+    TIPO_ADELANTO = "ADELANTO"
+    TIPO_ABONO = "ABONO"
+    TIPO_CHOICES = [
+        (TIPO_ADELANTO, "Adelanto"),
+        (TIPO_ABONO, "Abono"),
+    ]
+
     sucursal = models.ForeignKey(
         Sucursal,
-        on_delete=models.CASCADE,
-        related_name="adelantos"
-    )
-
-    jornada = models.ForeignKey(
-        JornadaDiaria,
         on_delete=models.CASCADE,
         related_name="adelantos"
     )
@@ -508,13 +521,19 @@ class Adelanto(models.Model):
         related_name="adelantos"
     )
 
+    tipo = models.CharField(
+        max_length=10,
+        choices=TIPO_CHOICES,
+        default=TIPO_ADELANTO
+    )
+
     monto = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         validators=[MinValueValidator(Decimal("0.00"))]
     )
 
-    fecha = models.DateField(default=timezone.localdate)
+    fecha = models.DateField(auto_now_add=True)
     observacion = models.TextField(blank=True, null=True)
 
     class Meta:
@@ -523,7 +542,7 @@ class Adelanto(models.Model):
         ordering = ["-fecha", "-id"]
 
     def __str__(self):
-        return f"Adelanto {self.monto} - {self.conductor}"
+        return f"{self.get_tipo_display()} {self.monto} - {self.conductor}"
 
 
 class Mantenimiento(models.Model):
@@ -610,3 +629,31 @@ class ConfiguracionSistema(models.Model):
         if self.sucursal:
             return f"Configuración - {self.sucursal.nombre}"
         return "Configuración global"
+
+
+class LiquidacionConductor(models.Model):
+    conductor = models.ForeignKey(
+        'Conductor',
+        on_delete=models.PROTECT,
+        related_name='liquidaciones'
+    )
+    sucursal = models.ForeignKey(
+        'Sucursal',
+        on_delete=models.SET_NULL,
+        null=True
+    )
+    fecha_inicio = models.DateField()
+    fecha_fin = models.DateField()
+    total_jornadas = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_adelantos_pendientes = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    ajuste_manual = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_pago = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    notas = models.TextField(blank=True, null=True)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Liquidación'
+        ordering = ['-fecha_creacion']
+
+    def __str__(self):
+        return f"Liquidación {self.conductor} ({self.fecha_inicio} - {self.fecha_fin})"

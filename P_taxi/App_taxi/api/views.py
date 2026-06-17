@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.contrib.auth import authenticate
 from django.db.models import Q, Sum
+from django.http import HttpResponse
 from django.utils import timezone
 
 from rest_framework import status, viewsets
@@ -31,6 +32,7 @@ from ..models import (
     Adelanto,
     Mantenimiento,
     ConfiguracionSistema,
+    LiquidacionConductor,
 )
 
 from .serializers import (
@@ -52,6 +54,7 @@ from .serializers import (
     AdelantoSerializer,
     MantenimientoSerializer,
     ConfiguracionSistemaSerializer,
+    LiquidacionConductorSerializer,
 )
 
 from .permissions import (
@@ -968,7 +971,6 @@ class AdelantoViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = Adelanto.objects.select_related(
             "sucursal",
-            "jornada",
             "conductor",
             "estado"
         ).all()
@@ -986,20 +988,16 @@ class AdelantoViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        jornada = serializer.validated_data.get("jornada")
+        sucursal = serializer.validated_data.get("sucursal")
 
-        if not jornada:
-            raise ValidationError("El adelanto debe estar asociado a una jornada.")
+        if es_admin_sucursal(user):
+            if sucursal and sucursal.id != user.sucursal_id:
+                raise PermissionDenied("No puedes registrar adelantos en otra sucursal.")
 
-        if es_admin_sucursal(user) and jornada.sucursal_id != user.sucursal_id:
-            raise PermissionDenied("No puedes registrar adelantos en otra sucursal.")
+            serializer.save(sucursal=user.sucursal)
+            return
 
-        adelanto = serializer.save(
-            sucursal=jornada.sucursal,
-            conductor=jornada.conductor
-        )
-
-        recalcular_totales_jornada(adelanto.jornada)
+        serializer.save()
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -1008,14 +1006,177 @@ class AdelantoViewSet(viewsets.ModelViewSet):
         if es_admin_sucursal(user) and instance.sucursal_id != user.sucursal_id:
             raise PermissionDenied("No puedes modificar adelantos de otra sucursal.")
 
-        adelanto = serializer.save()
+        serializer.save()
 
-        recalcular_totales_jornada(adelanto.jornada)
+    @action(detail=True, methods=['get'], url_path='recibo')
+    def recibo(self, request, pk=None):
+        adelanto = self.get_object()
 
-    def perform_destroy(self, instance):
-        jornada = instance.jornada
-        instance.delete()
-        recalcular_totales_jornada(jornada)
+        conductor = f"{adelanto.conductor.nombre} {adelanto.conductor.apellido}".strip()
+        sucursal = adelanto.sucursal.nombre if adelanto.sucursal else "Sin sucursal"
+        tipo = adelanto.get_tipo_display()
+        monto = f"C$ {adelanto.monto:,.2f}"
+        fecha = adelanto.fecha.strftime("%d/%m/%Y") if adelanto.fecha else ""
+        observacion = adelanto.observacion or "Sin observación"
+        es_abono = adelanto.tipo == Adelanto.TIPO_ABONO
+        color = "#16a34a" if es_abono else "#dc2626"
+
+        html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Recibo #{adelanto.id} - {tipo}</title>
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: Arial, Helvetica, sans-serif; background: #f1f5f9; margin: 0; padding: 24px; color: #0f172a; }}
+  .recibo {{ max-width: 480px; margin: 0 auto; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px 32px; }}
+  .cabecera {{ text-align: center; border-bottom: 2px dashed #cbd5e1; padding-bottom: 16px; margin-bottom: 18px; }}
+  .cabecera h1 {{ margin: 0; font-size: 20px; }}
+  .cabecera p {{ margin: 4px 0 0; color: #64748b; font-size: 13px; }}
+  .tipo {{ display: inline-block; margin-top: 10px; padding: 4px 14px; border-radius: 999px; color: #fff; font-weight: bold; font-size: 13px; background: {color}; }}
+  .fila {{ display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid #f1f5f9; font-size: 14px; }}
+  .fila .etq {{ color: #64748b; font-weight: bold; }}
+  .fila .val {{ text-align: right; font-weight: bold; }}
+  .monto {{ text-align: center; margin: 20px 0 6px; font-size: 30px; font-weight: 900; color: {color}; }}
+  .obs {{ margin-top: 14px; background: #f8fafc; border-radius: 10px; padding: 12px 14px; font-size: 13px; color: #334155; }}
+  .acciones {{ text-align: center; margin-top: 22px; }}
+  .btn {{ background: #F5B800; color: #fff; border: none; border-radius: 10px; padding: 12px 26px; font-size: 14px; font-weight: bold; cursor: pointer; }}
+  @media print {{ body {{ background: #fff; padding: 0; }} .recibo {{ border: none; }} .acciones {{ display: none; }} }}
+</style>
+</head>
+<body>
+  <div class="recibo">
+    <div class="cabecera">
+      <h1>Recibo de {tipo}</h1>
+      <p>Recibo N&deg; {adelanto.id}</p>
+      <span class="tipo">{tipo}</span>
+    </div>
+
+    <div class="monto">{monto}</div>
+
+    <div class="fila"><span class="etq">Conductor</span><span class="val">{conductor}</span></div>
+    <div class="fila"><span class="etq">Sucursal</span><span class="val">{sucursal}</span></div>
+    <div class="fila"><span class="etq">Tipo</span><span class="val">{tipo}</span></div>
+    <div class="fila"><span class="etq">Monto</span><span class="val">{monto}</span></div>
+    <div class="fila"><span class="etq">Fecha</span><span class="val">{fecha}</span></div>
+
+    <div class="obs"><strong>Observaci&oacute;n:</strong> {observacion}</div>
+
+    <div class="acciones">
+      <button class="btn" onclick="window.print()">&#128424; Imprimir recibo</button>
+    </div>
+  </div>
+</body>
+</html>"""
+
+        return HttpResponse(html, content_type="text/html")
+
+
+class LiquidacionConductorViewSet(viewsets.ModelViewSet):
+    serializer_class = LiquidacionConductorSerializer
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [EsAdminSucursalOSuperAdmin()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = LiquidacionConductor.objects.select_related(
+            "conductor",
+            "sucursal"
+        ).all()
+
+        if es_superadmin(user):
+            return qs
+
+        if es_admin_sucursal(user):
+            return qs.filter(sucursal=user.sucursal)
+
+        if es_taxista(user):
+            return qs.filter(conductor__usuario=user)
+
+        return qs.none()
+
+    def perform_create(self, serializer):
+        liq = serializer.save()
+
+        # Bloquear todas las jornadas del rango asignándoles esta liquidación
+        JornadaDiaria.objects.filter(
+            conductor=liq.conductor,
+            fecha__gte=liq.fecha_inicio,
+            fecha__lte=liq.fecha_fin,
+            liquidacion__isnull=True
+        ).update(liquidacion=liq)
+
+    @action(detail=False, methods=['get'], url_path='preview')
+    def preview(self, request):
+        conductor_id = request.query_params.get('conductor_id')
+        fecha_inicio = request.query_params.get('fecha_inicio')
+        fecha_fin = request.query_params.get('fecha_fin')
+
+        if not (conductor_id and fecha_inicio and fecha_fin):
+            return Response(
+                {"detail": "conductor_id, fecha_inicio y fecha_fin son obligatorios."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Jornadas del conductor en el rango que aún NO están liquidadas
+        jornadas = JornadaDiaria.objects.filter(
+            conductor_id=conductor_id,
+            fecha__gte=fecha_inicio,
+            fecha__lte=fecha_fin,
+            liquidacion__isnull=True
+        ).order_by('fecha')
+
+        total_jornadas = sum(
+            (j.pago_conductor for j in jornadas),
+            Decimal("0.00")
+        )
+
+        # Adelantos pendientes del conductor (adelantos - abonos)
+        adelantos = Adelanto.objects.filter(conductor_id=conductor_id, tipo='ADELANTO')
+        abonos = Adelanto.objects.filter(conductor_id=conductor_id, tipo='ABONO')
+        total_adelantos = sum((a.monto for a in adelantos), Decimal("0.00"))
+        total_abonos = sum((a.monto for a in abonos), Decimal("0.00"))
+        pendiente_adelantos = max(total_adelantos - total_abonos, Decimal("0.00"))
+
+        return Response({
+            'jornadas': [
+                {'id': j.id, 'fecha': j.fecha, 'monto': j.pago_conductor}
+                for j in jornadas
+            ],
+            'total_jornadas': total_jornadas,
+            'pendiente_adelantos': pendiente_adelantos,
+            'total_sugerido': total_jornadas - pendiente_adelantos,
+            'jornadas_count': jornadas.count()
+        })
+
+    @action(detail=True, methods=['get'], url_path='recibo')
+    def recibo(self, request, pk=None):
+        liq = self.get_object()
+        jornadas = liq.jornadas.all().order_by('fecha')
+        filas = ''.join([
+            f"<tr><td>{j.fecha}</td><td>C$ {j.pago_conductor}</td></tr>"
+            for j in jornadas
+        ])
+        html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Liquidación</title>
+    <style>body{{font-family:Arial;max-width:500px;margin:40px auto;padding:20px}}
+    table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #ccc;padding:6px}}
+    .total{{font-size:1.2em;font-weight:bold}}@media print{{button{{display:none}}}}</style></head>
+    <body><h2>Recibo de Liquidación — TaxiAdmin</h2>
+    <p><b>Conductor:</b> {liq.conductor.nombre} {liq.conductor.apellido}</p>
+    <p><b>Período:</b> {liq.fecha_inicio} al {liq.fecha_fin}</p>
+    <table><tr><th>Fecha</th><th>Ganancia conductor</th></tr>{filas}</table>
+    <br>
+    <p>Total jornadas: C$ {liq.total_jornadas}</p>
+    <p>Adelantos pendientes: - C$ {liq.total_adelantos_pendientes}</p>
+    <p>Ajuste manual: C$ {liq.ajuste_manual}</p>
+    <p class="total">TOTAL A PAGAR: C$ {liq.total_pago}</p>
+    <p>Notas: {liq.notas or '—'}</p>
+    <br><button onclick="window.print()">🖨 Imprimir</button>
+    </body></html>"""
+        return HttpResponse(html)
 
 
 class MantenimientoViewSet(viewsets.ModelViewSet):
