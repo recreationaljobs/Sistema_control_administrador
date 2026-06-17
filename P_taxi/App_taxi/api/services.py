@@ -69,11 +69,9 @@ def recalcular_totales_jornada(jornada):
         total=Sum("monto")
     )["total"] or Decimal("0.00")
 
-    total_adelantos = jornada.adelantos.exclude(
-        estado__codigo="anulado"
-    ).aggregate(
-        total=Sum("monto")
-    )["total"] or Decimal("0.00")
+    # Los adelantos ahora son independientes por conductor y ya no se
+    # asocian a una jornada, por lo que no afectan los totales de la jornada.
+    total_adelantos = Decimal("0.00")
 
     pago_pendiente = Decimal(jornada.pago_conductor) - Decimal(total_adelantos)
     saldo_excedente = Decimal("0.00")

@@ -208,7 +208,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='conductor',
             name='sucursal',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='conductores', to='App_taxi.sucursal'),
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='conductores', to='App_taxi.sucursal'),
         ),
         migrations.CreateModel(
             name='Adelanto',

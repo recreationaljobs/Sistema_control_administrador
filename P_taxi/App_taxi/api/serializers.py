@@ -298,6 +298,9 @@ class ConductorSerializer(serializers.ModelSerializer):
             "direccion",
             "licencia",
             "vencimiento_licencia",
+            "numero_licencia",
+            "fecha_inicio_licencia",
+            "fecha_vencimiento_licencia",
             "fecha_registro",
             "activo",
         ]
@@ -757,6 +760,7 @@ class AdelantoSerializer(serializers.ModelSerializer):
     conductor_nombre = serializers.SerializerMethodField()
     estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
     estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
+    tipo_display = serializers.CharField(source="get_tipo_display", read_only=True)
 
     class Meta:
         model = Adelanto
@@ -764,12 +768,13 @@ class AdelantoSerializer(serializers.ModelSerializer):
             "id",
             "sucursal",
             "sucursal_nombre",
-            "jornada",
             "conductor",
             "conductor_nombre",
             "estado",
             "estado_nombre",
             "estado_codigo",
+            "tipo",
+            "tipo_display",
             "monto",
             "fecha",
             "observacion",
@@ -780,24 +785,12 @@ class AdelantoSerializer(serializers.ModelSerializer):
             "conductor_nombre",
             "estado_nombre",
             "estado_codigo",
+            "tipo_display",
+            "fecha",
         ]
 
     def get_conductor_nombre(self, obj):
         return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
-
-    def validate(self, attrs):
-        jornada = attrs.get("jornada", getattr(self.instance, "jornada", None))
-        conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
-        sucursal = attrs.get("sucursal", getattr(self.instance, "sucursal", None))
-
-        if jornada:
-            if conductor and conductor.id != jornada.conductor_id:
-                raise serializers.ValidationError("El conductor no coincide con la jornada.")
-
-            if sucursal and sucursal.id != jornada.sucursal_id:
-                raise serializers.ValidationError("La sucursal no coincide con la jornada.")
-
-        return attrs
 
 
 class JornadaDiariaSerializer(serializers.ModelSerializer):
@@ -810,7 +803,6 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
     estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
 
     gastos = GastoSerializer(many=True, read_only=True)
-    adelantos = AdelantoSerializer(many=True, read_only=True)
 
     class Meta:
         model = JornadaDiaria
@@ -842,7 +834,6 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "observaciones",
             "fecha_registro",
             "gastos",
-            "adelantos",
         ]
 
         read_only_fields = [
@@ -863,7 +854,6 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "ganancia_dueno",
             "fecha_registro",
             "gastos",
-            "adelantos",
         ]
 
         extra_kwargs = {
