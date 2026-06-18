@@ -316,6 +316,14 @@ class AsignacionVehiculo(models.Model):
 
 
 class JornadaDiaria(models.Model):
+
+    liquidacion = models.ForeignKey(
+        "LiquidacionConductor",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="jornadas"
+    )
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,
@@ -347,7 +355,10 @@ class JornadaDiaria(models.Model):
     )
 
     kilometraje_inicial = models.PositiveIntegerField()
-    kilometraje_final = models.PositiveIntegerField()
+    kilometraje_final = models.PositiveIntegerField(
+        blank=True,
+        null=True
+    )
     kilometros_recorridos = models.PositiveIntegerField(default=0)
 
     ingreso_bruto = models.DecimalField(
@@ -492,19 +503,25 @@ class Gasto(models.Model):
         tipo = self.tipo_gasto.nombre if self.tipo_gasto else "Gasto"
         return f"{tipo} - {self.monto}"
 
+class EstadoAdelanto(models.Model):
+    nombre = models.CharField(max_length=50)
+    codigo = models.CharField(max_length=50, unique=True)
+
+    class Meta:
+        verbose_name = "Estado de adelanto"
+        verbose_name_plural = "Estados de adelantos"
+        ordering = ["nombre"]
+
+    def __str__(self):
+        return self.nombre
 
 class Adelanto(models.Model):
-    TIPO_ADELANTO = "ADELANTO"
-    TIPO_ABONO = "ABONO"
-    TIPO_CHOICES = [
-        (TIPO_ADELANTO, "Adelanto"),
-        (TIPO_ABONO, "Abono"),
-    ]
-
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,
-        related_name="adelantos"
+        related_name="adelantos",
+        null=True,
+        blank=True
     )
 
     conductor = models.ForeignKey(
@@ -519,12 +536,6 @@ class Adelanto(models.Model):
         blank=True,
         null=True,
         related_name="adelantos"
-    )
-
-    tipo = models.CharField(
-        max_length=10,
-        choices=TIPO_CHOICES,
-        default=TIPO_ADELANTO
     )
 
     monto = models.DecimalField(
@@ -542,8 +553,8 @@ class Adelanto(models.Model):
         ordering = ["-fecha", "-id"]
 
     def __str__(self):
-        return f"{self.get_tipo_display()} {self.monto} - {self.conductor}"
-
+        estado_nombre = self.estado.nombre if self.estado else "Movimiento"
+        return f"{estado_nombre} {self.monto} - {self.conductor}"
 
 class Mantenimiento(models.Model):
     sucursal = models.ForeignKey(
@@ -632,28 +643,60 @@ class ConfiguracionSistema(models.Model):
 
 
 class LiquidacionConductor(models.Model):
-    conductor = models.ForeignKey(
-        'Conductor',
-        on_delete=models.PROTECT,
-        related_name='liquidaciones'
-    )
     sucursal = models.ForeignKey(
-        'Sucursal',
-        on_delete=models.SET_NULL,
-        null=True
+        Sucursal,
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name="liquidaciones"
     )
+
+    conductor = models.ForeignKey(
+        Conductor,
+        on_delete=models.CASCADE,
+        related_name="liquidaciones"
+    )
+
     fecha_inicio = models.DateField()
     fecha_fin = models.DateField()
-    total_jornadas = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    total_adelantos_pendientes = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    ajuste_manual = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    total_pago = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    total_jornadas = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    total_adelantos_pendientes = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    abono_aplicado = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    ajuste_manual = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    total_pago = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
     notas = models.TextField(blank=True, null=True)
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        verbose_name = 'Liquidación'
-        ordering = ['-fecha_creacion']
+        verbose_name = "Liquidación de conductor"
+        verbose_name_plural = "Liquidaciones de conductores"
+        ordering = ["-fecha_creacion", "-id"]
 
     def __str__(self):
-        return f"Liquidación {self.conductor} ({self.fecha_inicio} - {self.fecha_fin})"
+        return f"Liquidación {self.conductor} - {self.fecha_inicio} a {self.fecha_fin}"

@@ -2,7 +2,6 @@ from decimal import Decimal
 
 from django.contrib.auth import authenticate
 from django.db.models import Q, Sum
-from django.http import HttpResponse
 from django.utils import timezone
 
 from rest_framework import status, viewsets
@@ -60,6 +59,7 @@ from .serializers import (
 from .permissions import (
     EsSuperAdmin,
     EsAdminSucursalOSuperAdmin,
+    EstaAutenticado,
     es_superadmin,
     es_admin_sucursal,
     es_taxista,
@@ -78,6 +78,131 @@ from .services import (
     sumar_entero,
 )
 
+CODIGOS_ADELANTO = ["adelanto", "anticipo"]
+CODIGOS_ABONO = ["abono", "abonado"]
+
+
+def q_estado_codigos(codigos):
+    q = Q()
+
+    for codigo in codigos:
+        q |= Q(estado__codigo__iexact=codigo)
+
+    return q
+
+
+def es_estado_abono(estado):
+    if not estado:
+        return False
+
+    return estado.codigo.lower() in CODIGOS_ABONO
+
+
+def es_estado_adelanto(estado):
+    if not estado:
+        return False
+
+    return estado.codigo.lower() in CODIGOS_ADELANTO
+
+
+def obtener_estado_por_tipo(tipo):
+    tipo = (tipo or "").upper()
+
+    if tipo == "ABONO":
+        return EstadoAdelanto.objects.filter(
+            Q(codigo__iexact="abono") |
+            Q(codigo__iexact="abonado")
+        ).first()
+
+    return EstadoAdelanto.objects.filter(
+        Q(codigo__iexact="adelanto") |
+        Q(codigo__iexact="anticipo")
+    ).first()
+
+def obtener_tipo_desde_estado(estado):
+    if not estado:
+        return "ADELANTO"
+
+    codigo = estado.codigo.lower()
+
+    if codigo in CODIGOS_ABONO:
+        return "ABONO"
+
+    return "ADELANTO"
+
+
+def obtener_tipo_display_desde_estado(estado):
+    if not estado:
+        return "Movimiento"
+
+    codigo = estado.codigo.lower()
+
+    if codigo in ["abono", "abonado"]:
+        return "Abono"
+
+    if codigo == "anticipo":
+        return "Anticipo"
+
+    return "Adelanto"
+def obtener_sucursal_por_rol(user, conductor=None):
+    if not conductor:
+        raise ValidationError("Debes seleccionar un conductor.")
+
+    if es_superadmin(user):
+        return conductor.sucursal  # Puede ser None. Eso significa entorno super_admin.
+
+    if es_admin_sucursal(user):
+        if not user.sucursal:
+            raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
+        if conductor.sucursal_id != user.sucursal_id:
+            raise PermissionDenied(
+                "No puedes registrar movimientos para un conductor de otra sucursal."
+            )
+
+        return user.sucursal
+
+    if es_taxista(user):
+        try:
+            perfil = user.perfil_conductor
+        except Conductor.DoesNotExist:
+            raise ValidationError("Este usuario no tiene perfil de conductor.")
+
+        if conductor.id != perfil.id:
+            raise PermissionDenied("No puedes consultar información de otro conductor.")
+
+        return perfil.sucursal  # También puede ser None si es entorno super_admin.
+
+    raise PermissionDenied("No tienes permiso para realizar esta acción.")
+
+def calcular_saldo_adelantos(conductor, sucursal):
+    qs = Adelanto.objects.filter(
+        conductor=conductor,
+        sucursal=sucursal
+    )
+
+    total_adelantos = qs.filter(
+        q_estado_codigos(CODIGOS_ADELANTO)
+    ).aggregate(
+        total=Sum("monto")
+    )["total"] or Decimal("0.00")
+
+    total_abonos = qs.filter(
+        q_estado_codigos(CODIGOS_ABONO)
+    ).aggregate(
+        total=Sum("monto")
+    )["total"] or Decimal("0.00")
+
+    pendiente = total_adelantos - total_abonos
+
+    if pendiente < Decimal("0.00"):
+        pendiente = Decimal("0.00")
+
+    return {
+        "total_adelantos": total_adelantos,
+        "total_abonos": total_abonos,
+        "saldo_pendiente": pendiente,
+    }
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
@@ -160,7 +285,7 @@ class SucursalViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
-            return [EsAdminSucursalOSuperAdmin()]
+            return [EstaAutenticado()]
 
         return [EsSuperAdmin()]
 
@@ -178,15 +303,22 @@ class SucursalViewSet(viewsets.ModelViewSet):
 
             return qs.filter(id=user.sucursal_id)
 
-        return qs.none()
+        if es_taxista(user):
+            conductor = getattr(user, "perfil_conductor", None)
 
+            if conductor and conductor.sucursal_id:
+                return qs.filter(id=conductor.sucursal_id)
+
+            return qs.none()
+
+        return qs.none()
 
 class RolViewSet(viewsets.ModelViewSet):
     serializer_class = RolSerializer
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
-            return [EsAdminSucursalOSuperAdmin()]
+            return [EstaAutenticado()]
 
         return [EsSuperAdmin()]
 
@@ -199,59 +331,58 @@ class RolViewSet(viewsets.ModelViewSet):
             return queryset
 
         if es_admin_sucursal(user):
-            return queryset.exclude(codigo="superadmin")
+            return queryset.filter(codigo="taxista")
 
         return Rol.objects.none()
 
+class CatalogoProtegidoMixin:
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
 
-class EstadoVehiculoViewSet(viewsets.ModelViewSet):
+        return [EsAdminSucursalOSuperAdmin()]
+
+
+class EstadoVehiculoViewSet(CatalogoProtegidoMixin, viewsets.ModelViewSet):
     queryset = EstadoVehiculo.objects.all().order_by("nombre")
     serializer_class = EstadoVehiculoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
 
 
-class EstadoJornadaViewSet(viewsets.ModelViewSet):
+class EstadoJornadaViewSet(CatalogoProtegidoMixin, viewsets.ModelViewSet):
     queryset = EstadoJornada.objects.all().order_by("nombre")
     serializer_class = EstadoJornadaSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
 
 
-class TipoGastoViewSet(viewsets.ModelViewSet):
+class TipoGastoViewSet(CatalogoProtegidoMixin, viewsets.ModelViewSet):
     queryset = TipoGasto.objects.all().order_by("nombre")
     serializer_class = TipoGastoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
 
 
-class EstadoGastoViewSet(viewsets.ModelViewSet):
+class EstadoGastoViewSet(CatalogoProtegidoMixin, viewsets.ModelViewSet):
     queryset = EstadoGasto.objects.all().order_by("nombre")
     serializer_class = EstadoGastoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
 
 
-class EstadoAdelantoViewSet(viewsets.ModelViewSet):
+class EstadoAdelantoViewSet(CatalogoProtegidoMixin, viewsets.ModelViewSet):
     queryset = EstadoAdelanto.objects.all().order_by("nombre")
     serializer_class = EstadoAdelantoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
 
 
-class TipoMantenimientoViewSet(viewsets.ModelViewSet):
+class TipoMantenimientoViewSet(CatalogoProtegidoMixin, viewsets.ModelViewSet):
     queryset = TipoMantenimiento.objects.all().order_by("nombre")
     serializer_class = TipoMantenimientoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
 
 
-class EstadoMantenimientoViewSet(viewsets.ModelViewSet):
+class EstadoMantenimientoViewSet(CatalogoProtegidoMixin, viewsets.ModelViewSet):
     queryset = EstadoMantenimiento.objects.all().order_by("nombre")
     serializer_class = EstadoMantenimientoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
-
 
 class UsuarioViewSet(viewsets.ModelViewSet):
     serializer_class = UsuarioSerializer
 
     def get_permissions(self):
-        if self.action in ["me"]:
-            return [IsAuthenticated()]
+        if self.action in ["list", "retrieve", "me"]:
+            return [EstaAutenticado()]
 
         return [EsAdminSucursalOSuperAdmin()]
 
@@ -273,17 +404,20 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             return queryset.filter(
                 sucursal=user.sucursal
             ).exclude(
-                rol__codigo__in=["superadmin", "usuario_sistema", "admin_sucursal"]
+                rol__codigo__in=["superadmin", "super_admin", "usuario_sistema", "admin_sucursal"]
             )
 
-        return queryset.filter(id=user.id)
+        if es_taxista(user):
+            return queryset.filter(id=user.id)
+
+        return queryset.none()
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
         context["request"] = self.request
         return context
 
-    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=["get"], permission_classes=[EstaAutenticado])
     def me(self, request):
         return Response(self.get_serializer(request.user).data)
 
@@ -302,11 +436,10 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             if not rol or rol.codigo != "taxista":
                 raise PermissionDenied("Un administrador de sucursal solo puede crear usuarios taxistas.")
 
-            serializer.save()
+            serializer.save(sucursal=user.sucursal)
             return
 
         raise PermissionDenied("No tienes permiso para crear usuarios.")
-
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -324,7 +457,7 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             if not rol or rol.codigo != "taxista":
                 raise PermissionDenied("Un administrador de sucursal solo puede modificar usuarios taxistas.")
 
-            serializer.save()
+            serializer.save(sucursal=user.sucursal)
             return
 
         raise PermissionDenied("No tienes permiso para modificar usuarios.")
@@ -382,14 +515,14 @@ class ConductorViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user
         instance = self.get_object()
-
         if es_superadmin(user):
-            if instance.sucursal_id is not None:
-                raise PermissionDenied("No puedes modificar conductores de una sucursal desde el panel superadmin.")
+            sucursal = serializer.validated_data.get("sucursal", instance.sucursal)
 
-            serializer.save(sucursal=None)
+            if not sucursal:
+                raise ValidationError("Debes seleccionar la sucursal del conductor.")
+
+            serializer.save(sucursal=sucursal)
             return
-
         if es_admin_sucursal(user):
             if instance.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes modificar conductores de otra sucursal.")
@@ -414,7 +547,7 @@ class ConductorViewSet(viewsets.ModelViewSet):
         search = request.query_params.get("search", "").strip()
 
         if es_superadmin(user):
-            qs = qs.filter(sucursal__isnull=True)
+             pass
 
         elif es_admin_sucursal(user):
             if not user.sucursal:
@@ -463,7 +596,7 @@ class VehiculoViewSet(viewsets.ModelViewSet):
         ).all().order_by("placa")
 
         if es_superadmin(user):
-            return qs.filter(sucursal__isnull=True)
+          pass
 
         if es_admin_sucursal(user):
             return qs.filter(sucursal=user.sucursal)
@@ -514,11 +647,13 @@ class VehiculoViewSet(viewsets.ModelViewSet):
 
         raise PermissionDenied("No tienes permiso para modificar vehículos.")
 
-
 class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
     serializer_class = AsignacionVehiculoSerializer
 
     def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [EstaAutenticado()]
+
         return [EsAdminSucursalOSuperAdmin()]
 
     def get_serializer_context(self):
@@ -552,14 +687,9 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
         vehiculo = serializer.validated_data.get("vehiculo")
 
         if es_superadmin(user):
-            if conductor.sucursal_id is not None:
+            if conductor.sucursal_id is not None or vehiculo.sucursal_id is not None:
                 raise PermissionDenied(
-                    "No puedes asignar conductores de una sucursal desde el panel superadmin."
-                )
-
-            if vehiculo.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes asignar vehículos de una sucursal desde el panel superadmin."
+                    "No puedes asignar conductores o vehículos de sucursal desde el panel superadmin."
                 )
 
             serializer.save(sucursal=None)
@@ -583,32 +713,25 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user
         instance = self.get_object()
+
         conductor = serializer.validated_data.get("conductor", instance.conductor)
         vehiculo = serializer.validated_data.get("vehiculo", instance.vehiculo)
 
         if es_superadmin(user):
             if instance.sucursal_id is not None:
                 raise PermissionDenied(
-                    "No puedes modificar asignaciones de una sucursal desde el panel superadmin."
+                    "No puedes modificar asignaciones de sucursal desde el panel superadmin."
                 )
 
-            if conductor.sucursal_id is not None:
+            if conductor.sucursal_id is not None or vehiculo.sucursal_id is not None:
                 raise PermissionDenied(
-                    "No puedes asignar conductores de una sucursal desde el panel superadmin."
-                )
-
-            if vehiculo.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes asignar vehículos de una sucursal desde el panel superadmin."
+                    "No puedes usar conductores o vehículos de sucursal desde el panel superadmin."
                 )
 
             serializer.save(sucursal=None)
             return
 
         if es_admin_sucursal(user):
-            if not user.sucursal:
-                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
-
             if instance.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes modificar asignaciones de otra sucursal.")
 
@@ -755,16 +878,40 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
 
         porcentaje = self._obtener_porcentaje(sucursal)
 
+        kilometraje_inicial = serializer.validated_data.get("kilometraje_inicial")
+        kilometraje_final = serializer.validated_data.get("kilometraje_final")
+        ingreso_bruto = serializer.validated_data.get("ingreso_bruto") or Decimal("0.00")
+
+        if kilometraje_final is None:
+            jornada = serializer.save(
+                sucursal=sucursal,
+                conductor=conductor,
+                vehiculo=vehiculo,
+                kilometraje_inicial=kilometraje_inicial,
+                kilometraje_final=None,
+                ingreso_bruto=ingreso_bruto,
+                porcentaje_pago_conductor=porcentaje,
+                kilometros_recorridos=0,
+                pago_conductor=Decimal("0.00")
+            )
+
+            recalcular_totales_jornada(jornada)
+            return
+
         campos_calculados = calcular_campos_jornada(
-            serializer.validated_data.get("kilometraje_inicial"),
-            serializer.validated_data.get("kilometraje_final"),
-            serializer.validated_data.get("ingreso_bruto"),
+            kilometraje_inicial,
+            kilometraje_final,
+            ingreso_bruto,
             porcentaje
         )
 
         jornada = serializer.save(
             sucursal=sucursal,
             conductor=conductor,
+            vehiculo=vehiculo,
+            kilometraje_inicial=kilometraje_inicial,
+            kilometraje_final=kilometraje_final,
+            ingreso_bruto=ingreso_bruto,
             porcentaje_pago_conductor=porcentaje,
             kilometros_recorridos=campos_calculados["kilometros_recorridos"],
             pago_conductor=campos_calculados["pago_conductor"]
@@ -873,6 +1020,174 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
 
         actualizar_kilometraje_vehiculo(vehiculo, jornada.kilometraje_final)
         recalcular_totales_jornada(jornada)
+
+    @action(detail=True, methods=["patch"], url_path="cerrar")
+    def cerrar(self, request, pk=None):
+        jornada = self.get_object()
+        user = request.user
+
+        if es_taxista(user):
+            if jornada.conductor.usuario_id != user.id:
+                raise PermissionDenied("No puedes cerrar una jornada de otro conductor.")
+
+        elif es_admin_sucursal(user):
+            if jornada.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes cerrar jornadas de otra sucursal.")
+
+        elif es_superadmin(user):
+            pass
+
+        else:
+            raise PermissionDenied("No tienes permiso para cerrar jornadas.")
+
+        if jornada.kilometraje_final is not None:
+            raise ValidationError({
+                "detail": "Esta jornada ya fue cerrada."
+            })
+
+        kilometraje_final = request.data.get("kilometraje_final")
+
+        if kilometraje_final in [None, ""]:
+            raise ValidationError({
+                "kilometraje_final": "Debes ingresar el kilometraje final."
+            })
+
+        try:
+            kilometraje_final = int(kilometraje_final)
+        except ValueError:
+            raise ValidationError({
+                "kilometraje_final": "El kilometraje final debe ser un número válido."
+            })
+
+        if kilometraje_final < jornada.kilometraje_inicial:
+            raise ValidationError({
+                "kilometraje_final": "El kilometraje final no puede ser menor al kilometraje inicial."
+            })
+
+        porcentaje = self._obtener_porcentaje(jornada.sucursal)
+
+        campos_calculados = calcular_campos_jornada(
+            jornada.kilometraje_inicial,
+            kilometraje_final,
+            jornada.ingreso_bruto or Decimal("0.00"),
+            porcentaje
+        )
+
+        jornada.kilometraje_final = kilometraje_final
+        jornada.porcentaje_pago_conductor = porcentaje
+        jornada.kilometros_recorridos = campos_calculados["kilometros_recorridos"]
+        jornada.pago_conductor = campos_calculados["pago_conductor"]
+
+        observaciones = request.data.get("observaciones")
+        if observaciones is not None:
+            jornada.observaciones = observaciones
+
+        jornada.save()
+
+        actualizar_kilometraje_vehiculo(jornada.vehiculo, jornada.kilometraje_final)
+        recalcular_totales_jornada(jornada)
+
+        serializer = self.get_serializer(jornada)
+        return Response(serializer.data)
+
+
+    @action(detail=True, methods=["patch"], url_path="registrar-ingreso")
+    def registrar_ingreso(self, request, pk=None):
+        jornada = self.get_object()
+        user = request.user
+
+        if es_taxista(user):
+            raise PermissionDenied(
+                "El taxista no puede registrar el ingreso del día. Solo puede iniciar y cerrar jornada."
+            )
+
+        if es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
+            if jornada.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes registrar ingresos de otra sucursal.")
+
+        elif es_superadmin(user):
+            pass
+
+        else:
+            raise PermissionDenied("No tienes permiso para registrar ingresos.")
+
+        if jornada.kilometraje_final is None:
+            raise ValidationError({
+                "kilometraje_final": "Primero debes cerrar la jornada con el kilometraje final."
+            })
+
+        tipo_cobro = request.data.get("tipo_cobro") or "porcentaje"
+
+        if tipo_cobro not in ["porcentaje", "alquiler"]:
+            raise ValidationError({
+                "tipo_cobro": "El tipo de cobro debe ser porcentaje o alquiler."
+            })
+
+        ingreso_bruto = Decimal(
+            str(request.data.get("ingreso_bruto", "0.00") or "0.00")
+        )
+
+        monto_alquiler = Decimal(
+            str(request.data.get("monto_alquiler", "0.00") or "0.00")
+        )
+
+        porcentaje = Decimal(
+            str(request.data.get("porcentaje_pago_conductor", "30.00") or "30.00")
+        )
+
+        if tipo_cobro == "porcentaje":
+            if ingreso_bruto < Decimal("0.00"):
+                raise ValidationError({
+                    "ingreso_bruto": "El ingreso del día no puede ser negativo."
+                })
+
+            if porcentaje < Decimal("0.00") or porcentaje > Decimal("100.00"):
+                raise ValidationError({
+                    "porcentaje_pago_conductor": "El porcentaje debe estar entre 0 y 100."
+                })
+
+            jornada.ingreso_bruto = ingreso_bruto
+            jornada.porcentaje_pago_conductor = porcentaje
+            jornada.pago_conductor = (ingreso_bruto * porcentaje) / Decimal("100.00")
+
+            if hasattr(jornada, "tipo_cobro"):
+                jornada.tipo_cobro = "porcentaje"
+
+            if hasattr(jornada, "monto_alquiler"):
+                jornada.monto_alquiler = Decimal("0.00")
+
+        elif tipo_cobro == "alquiler":
+            if monto_alquiler < Decimal("0.00"):
+                raise ValidationError({
+                    "monto_alquiler": "El monto de alquiler no puede ser negativo."
+                })
+
+            jornada.ingreso_bruto = monto_alquiler
+            jornada.porcentaje_pago_conductor = Decimal("0.00")
+            jornada.pago_conductor = Decimal("0.00")
+
+            if hasattr(jornada, "tipo_cobro"):
+                jornada.tipo_cobro = "alquiler"
+
+            if hasattr(jornada, "monto_alquiler"):
+                jornada.monto_alquiler = monto_alquiler
+
+        jornada.kilometros_recorridos = (
+            jornada.kilometraje_final - jornada.kilometraje_inicial
+        )
+
+        observaciones = request.data.get("observaciones")
+        if observaciones is not None:
+            jornada.observaciones = observaciones
+
+        jornada.save()
+        recalcular_totales_jornada(jornada)
+
+        serializer = self.get_serializer(jornada)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class GastoViewSet(viewsets.ModelViewSet):
@@ -984,111 +1299,202 @@ class AdelantoViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy"]:
             return [EsAdminSucursalOSuperAdmin()]
+
         return [IsAuthenticated()]
 
     def get_queryset(self):
         user = self.request.user
+
         qs = Adelanto.objects.select_related(
             "sucursal",
             "conductor",
             "estado"
-        ).all()
+        ).all().order_by("-fecha", "-id")
+
+        conductor_id = self.request.query_params.get("conductor")
+        tipo = self.request.query_params.get("tipo")
+        fecha_inicio = self.request.query_params.get("fecha_inicio")
+        fecha_fin = self.request.query_params.get("fecha_fin")
 
         if es_superadmin(user):
-            return qs
+            qs = qs.filter(sucursal__isnull=True)
 
-        if es_admin_sucursal(user):
-            return qs.filter(sucursal=user.sucursal)
+        elif es_admin_sucursal(user):
+            qs = qs.filter(sucursal=user.sucursal)
 
-        if es_taxista(user):
-            return qs.filter(sucursal=user.sucursal, conductor__usuario=user)
+        elif es_taxista(user):
+            qs = qs.filter(conductor__usuario=user)
 
-        return qs.none()
+        else:
+            return qs.none()
+
+        if conductor_id:
+            qs = qs.filter(conductor_id=conductor_id)
+
+        if tipo:
+            tipo = tipo.upper()
+
+            if tipo == "ABONO":
+                qs = qs.filter(q_estado_codigos(CODIGOS_ABONO))
+
+            elif tipo == "ADELANTO":
+                qs = qs.filter(q_estado_codigos(CODIGOS_ADELANTO))
+
+        if fecha_inicio:
+            qs = qs.filter(fecha__gte=fecha_inicio)
+
+        if fecha_fin:
+            qs = qs.filter(fecha__lte=fecha_fin)
+
+        return qs
 
     def perform_create(self, serializer):
         user = self.request.user
-        sucursal = serializer.validated_data.get("sucursal")
+        conductor = serializer.validated_data.get("conductor")
+        estado = serializer.validated_data.get("estado")
+        monto = serializer.validated_data.get("monto")
+        tipo_recibido = self.request.data.get("tipo")
 
-        if es_admin_sucursal(user):
-            if sucursal and sucursal.id != user.sucursal_id:
-                raise PermissionDenied("No puedes registrar adelantos en otra sucursal.")
+        if not conductor:
+            raise ValidationError("Debes seleccionar un conductor.")
 
-            serializer.save(sucursal=user.sucursal)
-            return
+        if es_taxista(user):
+            raise PermissionDenied("El taxista no puede registrar adelantos o abonos.")
 
-        serializer.save()
+        sucursal = obtener_sucursal_por_rol(user, conductor)
+
+
+        if not estado:
+            estado = obtener_estado_por_tipo(tipo_recibido)
+
+        if not estado:
+            raise ValidationError(
+                "Debes seleccionar un estado válido para el movimiento."
+            )
+
+        es_abono = es_estado_abono(estado)
+
+        if es_abono:
+            saldo = calcular_saldo_adelantos(conductor, sucursal)
+
+            if saldo["saldo_pendiente"] <= Decimal("0.00"):
+                raise ValidationError(
+                    "Este conductor no tiene saldo pendiente de adelantos."
+                )
+
+            if monto > saldo["saldo_pendiente"]:
+                raise ValidationError(
+                    "El abono no puede ser mayor al saldo pendiente."
+                )
+
+        serializer.save(
+            sucursal=sucursal,
+            estado=estado
+        )
 
     def perform_update(self, serializer):
         user = self.request.user
         instance = self.get_object()
 
-        if es_admin_sucursal(user) and instance.sucursal_id != user.sucursal_id:
-            raise PermissionDenied("No puedes modificar adelantos de otra sucursal.")
+        conductor = serializer.validated_data.get("conductor", instance.conductor)
+        estado = serializer.validated_data.get("estado", instance.estado)
+        monto = serializer.validated_data.get("monto", instance.monto)
 
-        serializer.save()
+        sucursal = obtener_sucursal_por_rol(user, conductor)
 
-    @action(detail=True, methods=['get'], url_path='recibo')
+        if es_taxista(user):
+            raise PermissionDenied("El taxista no puede modificar adelantos o abonos.")
+
+        if instance.sucursal_id != (sucursal.id if sucursal else None):
+            raise PermissionDenied("No puedes modificar movimientos de otro entorno.")
+
+        if estado and es_estado_abono(estado):
+            saldo = calcular_saldo_adelantos(conductor, sucursal)
+
+            saldo_actual = saldo["saldo_pendiente"]
+
+            if instance.estado and es_estado_abono(instance.estado):
+                saldo_actual += instance.monto
+
+            if monto > saldo_actual:
+                raise ValidationError(
+                    "El abono no puede ser mayor al saldo pendiente."
+                )
+
+        serializer.save(
+            sucursal=sucursal,
+            estado=estado
+        )
+
+    @action(detail=False, methods=["get"], url_path="resumen-conductor")
+    def resumen_conductor(self, request):
+        conductor_id = request.query_params.get("conductor_id")
+
+        if not conductor_id:
+            return Response(
+                {"detail": "conductor_id es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            conductor = Conductor.objects.select_related("sucursal", "usuario").get(id=conductor_id)
+        except Conductor.DoesNotExist:
+            return Response(
+                {"detail": "El conductor no existe."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        sucursal = obtener_sucursal_por_rol(request.user, conductor)
+
+        qs = Adelanto.objects.select_related(
+            "sucursal",
+            "conductor",
+            "estado"
+        ).filter(
+            conductor=conductor,
+            sucursal=sucursal
+        ).order_by("-fecha", "-id")
+
+        saldo = calcular_saldo_adelantos(conductor, sucursal)
+
+        return Response({
+            "conductor": {
+                "id": conductor.id,
+                "nombre": f"{conductor.nombre} {conductor.apellido}".strip(),
+                "cedula": conductor.cedula,
+            },
+            "total_adelantos": saldo["total_adelantos"],
+            "total_abonos": saldo["total_abonos"],
+            "saldo_pendiente": saldo["saldo_pendiente"],
+            "historial": AdelantoSerializer(qs, many=True).data,
+        })
+
+    @action(detail=True, methods=["get"], url_path="recibo")
     def recibo(self, request, pk=None):
         adelanto = self.get_object()
 
-        conductor = f"{adelanto.conductor.nombre} {adelanto.conductor.apellido}".strip()
-        sucursal = adelanto.sucursal.nombre if adelanto.sucursal else "Sin sucursal"
-        tipo = adelanto.get_tipo_display()
-        monto = f"C$ {adelanto.monto:,.2f}"
-        fecha = adelanto.fecha.strftime("%d/%m/%Y") if adelanto.fecha else ""
-        observacion = adelanto.observacion or "Sin observación"
-        es_abono = adelanto.tipo == Adelanto.TIPO_ABONO
-        color = "#16a34a" if es_abono else "#dc2626"
-
-        html = f"""<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<title>Recibo #{adelanto.id} - {tipo}</title>
-<style>
-  * {{ box-sizing: border-box; }}
-  body {{ font-family: Arial, Helvetica, sans-serif; background: #f1f5f9; margin: 0; padding: 24px; color: #0f172a; }}
-  .recibo {{ max-width: 480px; margin: 0 auto; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px 32px; }}
-  .cabecera {{ text-align: center; border-bottom: 2px dashed #cbd5e1; padding-bottom: 16px; margin-bottom: 18px; }}
-  .cabecera h1 {{ margin: 0; font-size: 20px; }}
-  .cabecera p {{ margin: 4px 0 0; color: #64748b; font-size: 13px; }}
-  .tipo {{ display: inline-block; margin-top: 10px; padding: 4px 14px; border-radius: 999px; color: #fff; font-weight: bold; font-size: 13px; background: {color}; }}
-  .fila {{ display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid #f1f5f9; font-size: 14px; }}
-  .fila .etq {{ color: #64748b; font-weight: bold; }}
-  .fila .val {{ text-align: right; font-weight: bold; }}
-  .monto {{ text-align: center; margin: 20px 0 6px; font-size: 30px; font-weight: 900; color: {color}; }}
-  .obs {{ margin-top: 14px; background: #f8fafc; border-radius: 10px; padding: 12px 14px; font-size: 13px; color: #334155; }}
-  .acciones {{ text-align: center; margin-top: 22px; }}
-  .btn {{ background: #F5B800; color: #fff; border: none; border-radius: 10px; padding: 12px 26px; font-size: 14px; font-weight: bold; cursor: pointer; }}
-  @media print {{ body {{ background: #fff; padding: 0; }} .recibo {{ border: none; }} .acciones {{ display: none; }} }}
-</style>
-</head>
-<body>
-  <div class="recibo">
-    <div class="cabecera">
-      <h1>Recibo de {tipo}</h1>
-      <p>Recibo N&deg; {adelanto.id}</p>
-      <span class="tipo">{tipo}</span>
-    </div>
-
-    <div class="monto">{monto}</div>
-
-    <div class="fila"><span class="etq">Conductor</span><span class="val">{conductor}</span></div>
-    <div class="fila"><span class="etq">Sucursal</span><span class="val">{sucursal}</span></div>
-    <div class="fila"><span class="etq">Tipo</span><span class="val">{tipo}</span></div>
-    <div class="fila"><span class="etq">Monto</span><span class="val">{monto}</span></div>
-    <div class="fila"><span class="etq">Fecha</span><span class="val">{fecha}</span></div>
-
-    <div class="obs"><strong>Observaci&oacute;n:</strong> {observacion}</div>
-
-    <div class="acciones">
-      <button class="btn" onclick="window.print()">&#128424; Imprimir recibo</button>
-    </div>
-  </div>
-</body>
-</html>"""
-
-        return HttpResponse(html, content_type="text/html")
+        return Response({
+            "id": adelanto.id,
+            "tipo": obtener_tipo_desde_estado(adelanto.estado),
+            "tipo_display": obtener_tipo_display_desde_estado(adelanto.estado),
+            "monto": adelanto.monto,
+            "fecha": adelanto.fecha,
+            "observacion": adelanto.observacion or "",
+            "estado": {
+                "id": adelanto.estado.id,
+                "nombre": adelanto.estado.nombre,
+                "codigo": adelanto.estado.codigo,
+            } if adelanto.estado else None,
+            "sucursal": {
+                "id": adelanto.sucursal.id,
+                "nombre": adelanto.sucursal.nombre,
+            } if adelanto.sucursal else None,
+            "conductor": {
+                "id": adelanto.conductor.id,
+                "nombre": f"{adelanto.conductor.nombre} {adelanto.conductor.apellido}".strip(),
+                "cedula": adelanto.conductor.cedula,
+            } if adelanto.conductor else None,
+        })
 
 
 class LiquidacionConductorViewSet(viewsets.ModelViewSet):
@@ -1097,106 +1503,272 @@ class LiquidacionConductorViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy"]:
             return [EsAdminSucursalOSuperAdmin()]
+
         return [IsAuthenticated()]
 
     def get_queryset(self):
         user = self.request.user
+
         qs = LiquidacionConductor.objects.select_related(
             "conductor",
             "sucursal"
-        ).all()
+        ).all().order_by("-fecha_creacion", "-id")
+
+        conductor_id = self.request.query_params.get("conductor")
 
         if es_superadmin(user):
-            return qs
+            pass
+
+        elif es_admin_sucursal(user):
+            qs = qs.filter(sucursal=user.sucursal)
+
+        elif es_taxista(user):
+            qs = qs.filter(conductor__usuario=user)
+
+        else:
+            return qs.none()
+
+        if conductor_id:
+            qs = qs.filter(conductor_id=conductor_id)
+
+        return qs
+
+    def _obtener_conductor_y_sucursal(self, user, conductor_id):
+        if not conductor_id:
+            raise ValidationError("Debes seleccionar un conductor.")
+
+        try:
+            conductor = Conductor.objects.select_related(
+                "sucursal",
+                "usuario"
+            ).get(id=conductor_id)
+        except Conductor.DoesNotExist:
+            raise ValidationError("El conductor no existe.")
+
+        if es_superadmin(user):
+            sucursal = conductor.sucursal
+            return conductor, sucursal
 
         if es_admin_sucursal(user):
-            return qs.filter(sucursal=user.sucursal)
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
+            if conductor.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes liquidar conductores de otra sucursal.")
+
+            return conductor, user.sucursal
 
         if es_taxista(user):
-            return qs.filter(conductor__usuario=user)
+            if conductor.usuario_id != user.id:
+                raise PermissionDenied("No puedes consultar liquidaciones de otro conductor.")
 
-        return qs.none()
+            return conductor, conductor.sucursal
+
+        raise PermissionDenied("No tienes permiso para realizar esta acción.")
+
+    def _jornadas_pendientes(self, conductor, sucursal):
+        return JornadaDiaria.objects.select_related(
+            "vehiculo",
+            "estado"
+        ).filter(
+            conductor=conductor,
+            sucursal=sucursal,
+            liquidacion__isnull=True
+        ).order_by("fecha", "id")
+
+    @action(detail=False, methods=["get"], url_path="preview")
+    def preview(self, request):
+        conductor_id = request.query_params.get("conductor_id")
+
+        conductor, sucursal = self._obtener_conductor_y_sucursal(
+            request.user,
+            conductor_id
+        )
+
+        jornadas = self._jornadas_pendientes(conductor, sucursal)
+
+        total_jornadas = jornadas.aggregate(
+            total=Sum("pago_conductor")
+        )["total"] or Decimal("0.00")
+
+        primera_jornada = jornadas.first()
+        ultima_jornada = jornadas.last()
+
+        fecha_inicio = primera_jornada.fecha if primera_jornada else None
+        fecha_fin = ultima_jornada.fecha if ultima_jornada else None
+
+        saldo = calcular_saldo_adelantos(conductor, sucursal)
+        pendiente_adelantos = saldo["saldo_pendiente"]
+
+        movimientos_adelantos = Adelanto.objects.select_related(
+            "estado",
+            "conductor",
+            "sucursal"
+        ).filter(
+            conductor=conductor,
+            sucursal=sucursal
+        ).order_by("-fecha", "-id")
+
+        return Response({
+            "conductor": {
+                "id": conductor.id,
+                "nombre": f"{conductor.nombre} {conductor.apellido}".strip(),
+                "cedula": conductor.cedula,
+            },
+            "fecha_inicio": fecha_inicio,
+            "fecha_fin": fecha_fin,
+            "jornadas_count": jornadas.count(),
+            "total_jornadas": total_jornadas,
+            "total_adelantos": saldo["total_adelantos"],
+            "total_abonos": saldo["total_abonos"],
+            "pendiente_adelantos": pendiente_adelantos,
+            "total_sugerido": total_jornadas,
+            "jornadas": [
+                {
+                    "id": jornada.id,
+                    "fecha": jornada.fecha,
+                    "vehiculo": jornada.vehiculo.placa if jornada.vehiculo else "",
+                    "kilometros_recorridos": jornada.kilometros_recorridos,
+                    "ingreso_bruto": jornada.ingreso_bruto,
+                    "pago_conductor": jornada.pago_conductor,
+                    "estado": jornada.estado.nombre if jornada.estado else "",
+                }
+                for jornada in jornadas
+            ],
+            "historial_adelantos": AdelantoSerializer(
+                movimientos_adelantos,
+                many=True
+            ).data,
+        })
 
     def perform_create(self, serializer):
-        liq = serializer.save()
-
-        # Bloquear todas las jornadas del rango asignándoles esta liquidación
-        JornadaDiaria.objects.filter(
-            conductor=liq.conductor,
-            fecha__gte=liq.fecha_inicio,
-            fecha__lte=liq.fecha_fin,
-            liquidacion__isnull=True
-        ).update(liquidacion=liq)
-
-    @action(detail=False, methods=['get'], url_path='preview')
-    def preview(self, request):
-        conductor_id = request.query_params.get('conductor_id')
-        fecha_inicio = request.query_params.get('fecha_inicio')
-        fecha_fin = request.query_params.get('fecha_fin')
-
-        if not (conductor_id and fecha_inicio and fecha_fin):
-            return Response(
-                {"detail": "conductor_id, fecha_inicio y fecha_fin son obligatorios."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Jornadas del conductor en el rango que aún NO están liquidadas
-        jornadas = JornadaDiaria.objects.filter(
-            conductor_id=conductor_id,
-            fecha__gte=fecha_inicio,
-            fecha__lte=fecha_fin,
-            liquidacion__isnull=True
-        ).order_by('fecha')
-
-        total_jornadas = sum(
-            (j.pago_conductor for j in jornadas),
+        user = self.request.user
+        conductor = serializer.validated_data.get("conductor")
+        abono_aplicado = serializer.validated_data.get(
+            "abono_aplicado",
+            Decimal("0.00")
+        )
+        ajuste_manual = serializer.validated_data.get(
+            "ajuste_manual",
             Decimal("0.00")
         )
 
-        # Adelantos pendientes del conductor (adelantos - abonos)
-        adelantos = Adelanto.objects.filter(conductor_id=conductor_id, tipo='ADELANTO')
-        abonos = Adelanto.objects.filter(conductor_id=conductor_id, tipo='ABONO')
-        total_adelantos = sum((a.monto for a in adelantos), Decimal("0.00"))
-        total_abonos = sum((a.monto for a in abonos), Decimal("0.00"))
-        pendiente_adelantos = max(total_adelantos - total_abonos, Decimal("0.00"))
+        conductor, sucursal = self._obtener_conductor_y_sucursal(
+            user,
+            conductor.id if conductor else None
+        )
+
+        if es_taxista(user):
+            raise PermissionDenied("El taxista no puede registrar liquidaciones.")
+
+        jornadas = self._jornadas_pendientes(conductor, sucursal)
+
+        if not jornadas.exists():
+            raise ValidationError("Este conductor no tiene jornadas pendientes de liquidar.")
+
+        total_jornadas = jornadas.aggregate(
+            total=Sum("pago_conductor")
+        )["total"] or Decimal("0.00")
+
+        primera_jornada = jornadas.first()
+        ultima_jornada = jornadas.last()
+
+        saldo = calcular_saldo_adelantos(conductor, sucursal)
+        pendiente_adelantos = saldo["saldo_pendiente"]
+
+        if abono_aplicado > pendiente_adelantos:
+            raise ValidationError("El abono aplicado no puede ser mayor al saldo pendiente.")
+
+        if abono_aplicado > (total_jornadas + ajuste_manual):
+            raise ValidationError("El abono aplicado no puede ser mayor al total disponible para pagar.")
+
+        total_pago = total_jornadas - abono_aplicado + ajuste_manual
+
+        if total_pago < Decimal("0.00"):
+            total_pago = Decimal("0.00")
+
+        liquidacion = serializer.save(
+            sucursal=sucursal,
+            conductor=conductor,
+            fecha_inicio=primera_jornada.fecha,
+            fecha_fin=ultima_jornada.fecha,
+            total_jornadas=total_jornadas,
+            total_adelantos_pendientes=pendiente_adelantos,
+            abono_aplicado=abono_aplicado,
+            ajuste_manual=ajuste_manual,
+            total_pago=total_pago,
+        )
+
+        jornadas.update(liquidacion=liquidacion)
+
+        if abono_aplicado > Decimal("0.00"):
+          
+            estado_abono = EstadoAdelanto.objects.filter(
+                Q(codigo__iexact="abono") |
+                Q(codigo__iexact="abonado")
+            ).first()
+
+            if not estado_abono:
+                raise ValidationError(
+                    "No existe un estado de adelanto con código 'abono' o 'abonado'."
+                )
+
+            Adelanto.objects.create(
+                sucursal=sucursal,
+                conductor=conductor,
+                estado=estado_abono,
+                monto=abono_aplicado,
+                observacion=f"Abono aplicado en liquidación #{liquidacion.id}"
+            )
+
+    @action(detail=True, methods=["get"], url_path="recibo")
+    def recibo(self, request, pk=None):
+        liquidacion = self.get_object()
+
+        jornadas = liquidacion.jornadas.select_related(
+            "vehiculo",
+            "estado"
+        ).all().order_by("fecha", "id")
+
+        saldo_actual = calcular_saldo_adelantos(
+            liquidacion.conductor,
+            liquidacion.sucursal
+        )
 
         return Response({
-            'jornadas': [
-                {'id': j.id, 'fecha': j.fecha, 'monto': j.pago_conductor}
-                for j in jornadas
+            "id": liquidacion.id,
+            "fecha_inicio": liquidacion.fecha_inicio,
+            "fecha_fin": liquidacion.fecha_fin,
+            "total_jornadas": liquidacion.total_jornadas,
+            "total_adelantos_pendientes": liquidacion.total_adelantos_pendientes,
+            "abono_aplicado": liquidacion.abono_aplicado,
+            "ajuste_manual": liquidacion.ajuste_manual,
+            "total_pago": liquidacion.total_pago,
+            "notas": liquidacion.notas or "",
+            "fecha_creacion": liquidacion.fecha_creacion,
+            "saldo_actual_adelantos": saldo_actual["saldo_pendiente"],
+            "sucursal": {
+                "id": liquidacion.sucursal.id,
+                "nombre": liquidacion.sucursal.nombre,
+            } if liquidacion.sucursal else None,
+            "conductor": {
+                "id": liquidacion.conductor.id,
+                "nombre": f"{liquidacion.conductor.nombre} {liquidacion.conductor.apellido}".strip(),
+                "cedula": liquidacion.conductor.cedula,
+            } if liquidacion.conductor else None,
+            "jornadas": [
+                {
+                    "id": jornada.id,
+                    "fecha": jornada.fecha,
+                    "vehiculo": jornada.vehiculo.placa if jornada.vehiculo else "",
+                    "kilometros_recorridos": jornada.kilometros_recorridos,
+                    "ingreso_bruto": jornada.ingreso_bruto,
+                    "pago_conductor": jornada.pago_conductor,
+                    "estado": jornada.estado.nombre if jornada.estado else "",
+                }
+                for jornada in jornadas
             ],
-            'total_jornadas': total_jornadas,
-            'pendiente_adelantos': pendiente_adelantos,
-            'total_sugerido': total_jornadas - pendiente_adelantos,
-            'jornadas_count': jornadas.count()
         })
-
-    @action(detail=True, methods=['get'], url_path='recibo')
-    def recibo(self, request, pk=None):
-        liq = self.get_object()
-        jornadas = liq.jornadas.all().order_by('fecha')
-        filas = ''.join([
-            f"<tr><td>{j.fecha}</td><td>C$ {j.pago_conductor}</td></tr>"
-            for j in jornadas
-        ])
-        html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Liquidación</title>
-    <style>body{{font-family:Arial;max-width:500px;margin:40px auto;padding:20px}}
-    table{{width:100%;border-collapse:collapse}}td,th{{border:1px solid #ccc;padding:6px}}
-    .total{{font-size:1.2em;font-weight:bold}}@media print{{button{{display:none}}}}</style></head>
-    <body><h2>Recibo de Liquidación — TaxiAdmin</h2>
-    <p><b>Conductor:</b> {liq.conductor.nombre} {liq.conductor.apellido}</p>
-    <p><b>Período:</b> {liq.fecha_inicio} al {liq.fecha_fin}</p>
-    <table><tr><th>Fecha</th><th>Ganancia conductor</th></tr>{filas}</table>
-    <br>
-    <p>Total jornadas: C$ {liq.total_jornadas}</p>
-    <p>Adelantos pendientes: - C$ {liq.total_adelantos_pendientes}</p>
-    <p>Ajuste manual: C$ {liq.ajuste_manual}</p>
-    <p class="total">TOTAL A PAGAR: C$ {liq.total_pago}</p>
-    <p>Notas: {liq.notas or '—'}</p>
-    <br><button onclick="window.print()">🖨 Imprimir</button>
-    </body></html>"""
-        return HttpResponse(html)
-
 
 class MantenimientoViewSet(viewsets.ModelViewSet):
     serializer_class = MantenimientoSerializer

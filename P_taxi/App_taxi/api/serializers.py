@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from decimal import Decimal
+from django.db.models import Sum
 
 from ..models import (
     Sucursal,
@@ -761,7 +763,8 @@ class AdelantoSerializer(serializers.ModelSerializer):
     conductor_nombre = serializers.SerializerMethodField()
     estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
     estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
-    tipo_display = serializers.CharField(source="get_tipo_display", read_only=True)
+    tipo = serializers.SerializerMethodField()
+    tipo_display = serializers.SerializerMethodField()
 
     class Meta:
         model = Adelanto
@@ -780,28 +783,84 @@ class AdelantoSerializer(serializers.ModelSerializer):
             "fecha",
             "observacion",
         ]
+
         read_only_fields = [
             "id",
+            "sucursal",
             "sucursal_nombre",
             "conductor_nombre",
             "estado_nombre",
             "estado_codigo",
+            "tipo",
             "tipo_display",
             "fecha",
         ]
 
+        extra_kwargs = {
+            "estado": {
+                "required": False,
+                "allow_null": True,
+            },
+            "observacion": {
+                "required": False,
+                "allow_blank": True,
+                "allow_null": True,
+            },
+        }
+
     def get_conductor_nombre(self, obj):
+        if not obj.conductor:
+            return ""
+
         return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
 
+    def get_tipo(self, obj):
+        if not obj.estado:
+            return "ADELANTO"
 
+        codigo = obj.estado.codigo.lower()
+
+        if codigo in ["abono", "abonado"]:
+            return "ABONO"
+
+        return "ADELANTO"
+
+    def get_tipo_display(self, obj):
+        if not obj.estado:
+            return "Movimiento"
+
+        codigo = obj.estado.codigo.lower()
+
+        if codigo in ["abono", "abonado"]:
+            return "Abono"
+
+        if codigo == "anticipo":
+            return "Anticipo"
+
+        return "Adelanto"
+
+    def validate(self, attrs):
+        monto = attrs.get("monto", getattr(self.instance, "monto", None))
+
+        if monto is not None and monto <= Decimal("0.00"):
+            raise serializers.ValidationError({
+                "monto": "El monto debe ser mayor que cero."
+            })
+
+        return attrs
 class JornadaDiariaSerializer(serializers.ModelSerializer):
-    sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
+    sucursal_nombre = serializers.SerializerMethodField()
     conductor_nombre = serializers.SerializerMethodField()
-    vehiculo_placa = serializers.CharField(source="vehiculo.placa", read_only=True)
-    vehiculo_numero = serializers.CharField(source="vehiculo.numero", read_only=True)
+    vehiculo_placa = serializers.SerializerMethodField()
+    vehiculo_numero = serializers.SerializerMethodField()
     vehiculo_descripcion = serializers.SerializerMethodField()
-    estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
-    estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
+    estado_nombre = serializers.SerializerMethodField()
+    estado_codigo = serializers.SerializerMethodField()
+
+    kilometraje_final = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
 
     gastos = GastoSerializer(many=True, read_only=True)
 
@@ -839,6 +898,7 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
 
         read_only_fields = [
             "id",
+            "sucursal",
             "sucursal_nombre",
             "estado_nombre",
             "estado_codigo",
@@ -858,21 +918,53 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
         ]
 
         extra_kwargs = {
-            "sucursal": {
-                "required": False,
-                "allow_null": True,
-            },
             "estado": {
                 "required": False,
                 "allow_null": True,
             },
+            "kilometraje_inicial": {
+                "required": True,
+            },
+            "kilometraje_final": {
+                "required": False,
+                "allow_null": True,
+            },
+            "ingreso_bruto": {
+                "required": False,
+            },
+            "observaciones": {
+                "required": False,
+                "allow_blank": True,
+                "allow_null": True,
+            },
         }
 
+    def get_sucursal_nombre(self, obj):
+        return obj.sucursal.nombre if obj.sucursal else ""
+
     def get_conductor_nombre(self, obj):
+        if not obj.conductor:
+            return ""
+
         return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
 
+    def get_vehiculo_placa(self, obj):
+        return obj.vehiculo.placa if obj.vehiculo else ""
+
+    def get_vehiculo_numero(self, obj):
+        return obj.vehiculo.numero if obj.vehiculo else ""
+
     def get_vehiculo_descripcion(self, obj):
+        if not obj.vehiculo:
+            return ""
+
         return f"{obj.vehiculo.numero} - {obj.vehiculo.placa} - {obj.vehiculo.marca} {obj.vehiculo.modelo}"
+
+    def get_estado_nombre(self, obj):
+        return obj.estado.nombre if obj.estado else ""
+
+    def get_estado_codigo(self, obj):
+        return obj.estado.codigo if obj.estado else ""
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -894,8 +986,15 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
                     "kilometraje_final": "El kilometraje final no puede ser menor al kilometraje inicial."
                 })
 
-        conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
-        vehiculo = attrs.get("vehiculo", getattr(self.instance, "vehiculo", None))
+        conductor = attrs.get(
+            "conductor",
+            getattr(self.instance, "conductor", None)
+        )
+
+        vehiculo = attrs.get(
+            "vehiculo",
+            getattr(self.instance, "vehiculo", None)
+        )
 
         if not user or not user.rol:
             raise serializers.ValidationError(
@@ -925,18 +1024,8 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
                 "vehiculo": "Debes seleccionar un vehículo."
             })
 
-        if codigo_rol == "superadmin":
-            if conductor.sucursal_id is not None:
-                raise serializers.ValidationError({
-                    "conductor": "Desde el panel superadmin solo puedes registrar jornadas para conductores del superadmin."
-                })
-
-            if vehiculo.sucursal_id is not None:
-                raise serializers.ValidationError({
-                    "vehiculo": "Desde el panel superadmin solo puedes registrar jornadas para vehículos del superadmin."
-                })
-
-            attrs["sucursal"] = None
+        if codigo_rol in ["superadmin", "super_admin"]:
+            attrs["sucursal"] = conductor.sucursal
 
         elif codigo_rol == "admin_sucursal":
             if not user.sucursal:
@@ -980,11 +1069,15 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             activa=True
         )
 
-        if codigo_rol == "superadmin":
-            asignacion_activa = asignacion_activa.filter(sucursal__isnull=True)
+        if codigo_rol in ["superadmin", "super_admin"]:
+            asignacion_activa = asignacion_activa.filter(
+                sucursal=conductor.sucursal
+            )
 
         elif codigo_rol in ["admin_sucursal", "taxista"]:
-            asignacion_activa = asignacion_activa.filter(sucursal=conductor.sucursal)
+            asignacion_activa = asignacion_activa.filter(
+                sucursal=conductor.sucursal
+            )
 
         if not asignacion_activa.exists():
             raise serializers.ValidationError({
@@ -1061,32 +1154,68 @@ class ConfiguracionSistemaSerializer(serializers.ModelSerializer):
 
 
 class LiquidacionConductorSerializer(serializers.ModelSerializer):
-    conductor_nombre = serializers.SerializerMethodField()
     sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
+    conductor_nombre = serializers.SerializerMethodField()
+    conductor_cedula = serializers.CharField(source="conductor.cedula", read_only=True)
 
     class Meta:
         model = LiquidacionConductor
         fields = [
             "id",
-            "conductor",
-            "conductor_nombre",
             "sucursal",
             "sucursal_nombre",
+            "conductor",
+            "conductor_nombre",
+            "conductor_cedula",
             "fecha_inicio",
             "fecha_fin",
             "total_jornadas",
             "total_adelantos_pendientes",
+            "abono_aplicado",
             "ajuste_manual",
             "total_pago",
             "notas",
             "fecha_creacion",
         ]
+
         read_only_fields = [
             "id",
-            "conductor_nombre",
+            "sucursal",
             "sucursal_nombre",
+            "conductor_nombre",
+            "conductor_cedula",
+            "fecha_inicio",
+            "fecha_fin",
+            "total_jornadas",
+            "total_adelantos_pendientes",
+            "total_pago",
             "fecha_creacion",
         ]
 
     def get_conductor_nombre(self, obj):
+        if not obj.conductor:
+            return ""
         return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
+
+    def validate(self, attrs):
+        ajuste_manual = attrs.get(
+            "ajuste_manual",
+            getattr(self.instance, "ajuste_manual", Decimal("0.00"))
+        )
+
+        abono_aplicado = attrs.get(
+            "abono_aplicado",
+            getattr(self.instance, "abono_aplicado", Decimal("0.00"))
+        )
+
+        if ajuste_manual is not None and ajuste_manual < Decimal("0.00"):
+            raise serializers.ValidationError({
+                "ajuste_manual": "El ajuste manual no puede ser negativo."
+            })
+
+        if abono_aplicado is not None and abono_aplicado < Decimal("0.00"):
+            raise serializers.ValidationError({
+                "abono_aplicado": "El abono aplicado no puede ser negativo."
+            })
+
+        return attrs
