@@ -61,4 +61,5 @@ urlpatterns = [
     path("reportes/financiero/", ReporteFinancieroView.as_view(), name="reporte-financiero"),
     path("reportes/kilometraje/", ReporteKilometrajeView.as_view(), name="reporte-kilometraje"),
     path("mantenimiento/alertas/", AlertasMantenimientoView.as_view(), name="alertas-mantenimiento"),
+    path("dashboard/financiero/", ReporteFinancieroView.as_view(), name="dashboard-financiero"),
 ]

@@ -156,9 +156,29 @@ class MiPerfilView(APIView):
     
 
 class SucursalViewSet(viewsets.ModelViewSet):
-    queryset = Sucursal.objects.all().order_by("nombre")
     serializer_class = SucursalSerializer
-    permission_classes = [EsSuperAdmin]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [EsAdminSucursalOSuperAdmin()]
+
+        return [EsSuperAdmin()]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        qs = Sucursal.objects.all().order_by("nombre")
+
+        if es_superadmin(user):
+            return qs
+
+        if es_admin_sucursal(user):
+            if not user.sucursal:
+                return qs.none()
+
+            return qs.filter(id=user.sucursal_id)
+
+        return qs.none()
 
 
 class RolViewSet(viewsets.ModelViewSet):
@@ -627,7 +647,6 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             "vehiculo"
         ).prefetch_related(
             "gastos",
-            "adelantos"
         ).all()
 
         fecha = self.request.query_params.get("fecha")
