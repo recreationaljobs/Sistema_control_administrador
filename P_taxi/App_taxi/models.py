@@ -522,11 +522,12 @@ class Adelanto(models.Model):
     )
 
     jornada = models.ForeignKey(
-        JornadaDiaria,
-        on_delete=models.CASCADE,
-        related_name="adelantos"
-    )
-
+    JornadaDiaria,
+    on_delete=models.SET_NULL,
+    related_name="adelantos",
+    blank=True,
+    null=True
+)
     conductor = models.ForeignKey(
         Conductor,
         on_delete=models.CASCADE,
