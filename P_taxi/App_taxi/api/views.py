@@ -596,7 +596,7 @@ class VehiculoViewSet(viewsets.ModelViewSet):
         ).all().order_by("placa")
 
         if es_superadmin(user):
-          pass
+            return qs
 
         if es_admin_sucursal(user):
             return qs.filter(sucursal=user.sucursal)
