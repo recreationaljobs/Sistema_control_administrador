@@ -486,7 +486,7 @@ class ConductorViewSet(viewsets.ModelViewSet):
         ).all().order_by("-id")
 
         if es_superadmin(user):
-            return qs.filter(sucursal__isnull=True)
+            return qs
 
         if es_admin_sucursal(user):
             return qs.filter(sucursal=user.sucursal)
@@ -671,7 +671,7 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
         ).all().order_by("-fecha_inicio")
 
         if es_superadmin(user):
-            return qs.filter(sucursal__isnull=True)
+            return qs
 
         if es_admin_sucursal(user):
             return qs.filter(sucursal=user.sucursal)
@@ -779,7 +779,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         vehiculo_id = self.request.query_params.get("vehiculo")
 
         if es_superadmin(user):
-            qs = qs.filter(sucursal__isnull=True)
+            pass
 
         elif es_admin_sucursal(user):
             qs = qs.filter(sucursal=user.sucursal)
@@ -1317,7 +1317,7 @@ class AdelantoViewSet(viewsets.ModelViewSet):
         fecha_fin = self.request.query_params.get("fecha_fin")
 
         if es_superadmin(user):
-            qs = qs.filter(sucursal__isnull=True)
+            pass
 
         elif es_admin_sucursal(user):
             qs = qs.filter(sucursal=user.sucursal)
