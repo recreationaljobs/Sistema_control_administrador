@@ -272,7 +272,9 @@ class UsuarioSerializer(serializers.ModelSerializer):
 
         return instance
 
-class ConductorSerializer(serializers.ModelSerializer):
+class ConductorSerializer(
+    serializers.ModelSerializer
+):
     sucursal_nombre = serializers.CharField(
         source="sucursal.nombre",
         read_only=True
@@ -283,10 +285,13 @@ class ConductorSerializer(serializers.ModelSerializer):
         read_only=True
     )
 
-    nombre_completo = serializers.SerializerMethodField()
+    nombre_completo = (
+        serializers.SerializerMethodField()
+    )
 
     class Meta:
         model = Conductor
+
         fields = [
             "id",
             "sucursal",
@@ -299,20 +304,21 @@ class ConductorSerializer(serializers.ModelSerializer):
             "telefono",
             "cedula",
             "direccion",
-            "licencia",
-            "vencimiento_licencia",
             "numero_licencia",
             "fecha_inicio_licencia",
             "fecha_vencimiento_licencia",
             "fecha_registro",
             "activo",
         ]
+
         read_only_fields = [
+            "id",
             "fecha_registro",
             "sucursal_nombre",
             "usuario_username",
             "nombre_completo",
         ]
+
         extra_kwargs = {
             "sucursal": {
                 "required": False,
@@ -322,60 +328,189 @@ class ConductorSerializer(serializers.ModelSerializer):
                 "required": False,
                 "allow_null": True,
             },
+            "numero_licencia": {
+                "required": True,
+                "allow_null": False,
+                "allow_blank": False,
+            },
+            "fecha_inicio_licencia": {
+                "required": True,
+                "allow_null": False,
+            },
+            "fecha_vencimiento_licencia": {
+                "required": True,
+                "allow_null": False,
+            },
         }
 
     def get_nombre_completo(self, obj):
-        return f"{obj.nombre} {obj.apellido}".strip()
+        return (
+            f"{obj.nombre} "
+            f"{obj.apellido}"
+        ).strip()
 
     def validate(self, attrs):
-        request = self.context.get("request")
-        user = request.user if request else None
+        request = self.context.get(
+            "request"
+        )
+
+        user = (
+            request.user
+            if request
+            else None
+        )
+
+        numero_licencia = attrs.get(
+            "numero_licencia",
+            getattr(
+                self.instance,
+                "numero_licencia",
+                None
+            )
+        )
+
+        fecha_inicio = attrs.get(
+            "fecha_inicio_licencia",
+            getattr(
+                self.instance,
+                "fecha_inicio_licencia",
+                None
+            )
+        )
+
+        fecha_vencimiento = attrs.get(
+            "fecha_vencimiento_licencia",
+            getattr(
+                self.instance,
+                "fecha_vencimiento_licencia",
+                None
+            )
+        )
+
+        cedula = attrs.get(
+            "cedula",
+            getattr(
+                self.instance,
+                "cedula",
+                None
+            )
+        )
+
+        if not numero_licencia:
+            raise serializers.ValidationError({
+                "numero_licencia": (
+                    "El número de licencia "
+                    "es obligatorio."
+                )
+            })
+
+        if not fecha_inicio:
+            raise serializers.ValidationError({
+                "fecha_inicio_licencia": (
+                    "La fecha de emisión "
+                    "es obligatoria."
+                )
+            })
+
+        if not fecha_vencimiento:
+            raise serializers.ValidationError({
+                "fecha_vencimiento_licencia": (
+                    "La fecha de vencimiento "
+                    "es obligatoria."
+                )
+            })
+
+        if (
+            fecha_inicio
+            and fecha_vencimiento
+            and fecha_vencimiento
+            <= fecha_inicio
+        ):
+            raise serializers.ValidationError({
+                "fecha_vencimiento_licencia": (
+                    "La fecha de vencimiento "
+                    "debe ser posterior a la "
+                    "fecha de emisión."
+                )
+            })
 
         if not user:
             return attrs
 
-        cedula = attrs.get("cedula", getattr(self.instance, "cedula", None))
+        codigo_rol = (
+            user.rol.codigo
+            if user.rol
+            else ""
+        )
 
-        if user.rol and user.rol.codigo == "superadmin":
+        if codigo_rol in [
+            "superadmin",
+            "super_admin",
+        ]:
             attrs["sucursal"] = None
 
             if cedula:
-                qs = Conductor.objects.filter(
-                    sucursal__isnull=True,
-                    cedula=cedula
+                queryset = (
+                    Conductor.objects.filter(
+                        sucursal__isnull=True,
+                        cedula=cedula
+                    )
                 )
 
                 if self.instance:
-                    qs = qs.exclude(pk=self.instance.pk)
+                    queryset = queryset.exclude(
+                        pk=self.instance.pk
+                    )
 
-                if qs.exists():
-                    raise serializers.ValidationError({
-                        "cedula": "Ya existe un conductor del superadmin con esta cédula."
-                    })
+                if queryset.exists():
+                    raise (
+                        serializers.ValidationError({
+                            "cedula": (
+                                "Ya existe un conductor "
+                                "del superadministrador "
+                                "con esta cédula."
+                            )
+                        })
+                    )
 
             return attrs
 
-        if user.rol and user.rol.codigo == "admin_sucursal":
+        if codigo_rol == "admin_sucursal":
             if not user.sucursal:
                 raise serializers.ValidationError({
-                    "sucursal": "Tu usuario no tiene una sucursal asignada."
+                    "sucursal": (
+                        "Tu usuario no tiene una "
+                        "sucursal asignada."
+                    )
                 })
 
-            attrs["sucursal"] = user.sucursal
+            attrs["sucursal"] = (
+                user.sucursal
+            )
 
             if cedula:
-                qs = Conductor.objects.filter(
-                    sucursal=user.sucursal,
-                    cedula=cedula
+                queryset = (
+                    Conductor.objects.filter(
+                        sucursal=user.sucursal,
+                        cedula=cedula
+                    )
                 )
 
                 if self.instance:
-                    qs = qs.exclude(pk=self.instance.pk)
+                    queryset = queryset.exclude(
+                        pk=self.instance.pk
+                    )
 
-                if qs.exists():
-                    raise serializers.ValidationError({
-                        "cedula": "Ya existe un conductor con esta cédula en tu sucursal."
-                    })
+                if queryset.exists():
+                    raise (
+                        serializers.ValidationError({
+                            "cedula": (
+                                "Ya existe un conductor "
+                                "con esta cédula en tu "
+                                "sucursal."
+                            )
+                        })
+                    )
 
             return attrs
 
@@ -697,15 +832,36 @@ class AsignacionVehiculoSerializer(serializers.ModelSerializer):
 
 
 class GastoSerializer(serializers.ModelSerializer):
-    sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
+    sucursal_nombre = serializers.CharField(
+        source="sucursal.nombre",
+        read_only=True
+    )
+
     conductor_nombre = serializers.SerializerMethodField()
-    vehiculo_placa = serializers.CharField(source="vehiculo.placa", read_only=True)
-    tipo_gasto_nombre = serializers.CharField(source="tipo_gasto.nombre", read_only=True)
-    estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
-    estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
+
+    vehiculo_placa = serializers.CharField(
+        source="vehiculo.placa",
+        read_only=True
+    )
+
+    tipo_gasto_nombre = serializers.CharField(
+        source="tipo_gasto.nombre",
+        read_only=True
+    )
+
+    estado_nombre = serializers.CharField(
+        source="estado.nombre",
+        read_only=True
+    )
+
+    estado_codigo = serializers.CharField(
+        source="estado.codigo",
+        read_only=True
+    )
 
     class Meta:
         model = Gasto
+
         fields = [
             "id",
             "sucursal",
@@ -724,8 +880,10 @@ class GastoSerializer(serializers.ModelSerializer):
             "monto",
             "fecha",
         ]
+
         read_only_fields = [
             "id",
+            "sucursal",
             "sucursal_nombre",
             "vehiculo_placa",
             "conductor_nombre",
@@ -737,37 +895,76 @@ class GastoSerializer(serializers.ModelSerializer):
     def get_conductor_nombre(self, obj):
         if not obj.conductor:
             return None
-        return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
+
+        return (
+            f"{obj.conductor.nombre} "
+            f"{obj.conductor.apellido}"
+        ).strip()
 
     def validate(self, attrs):
-        jornada = attrs.get("jornada", getattr(self.instance, "jornada", None))
-        vehiculo = attrs.get("vehiculo", getattr(self.instance, "vehiculo", None))
-        conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
-        sucursal = attrs.get("sucursal", getattr(self.instance, "sucursal", None))
+        jornada = attrs.get(
+            "jornada",
+            getattr(self.instance, "jornada", None)
+        )
+
+        vehiculo = attrs.get(
+            "vehiculo",
+            getattr(self.instance, "vehiculo", None)
+        )
+
+        conductor = attrs.get(
+            "conductor",
+            getattr(self.instance, "conductor", None)
+        )
 
         if jornada:
-            if vehiculo and vehiculo.id != jornada.vehiculo_id:
-                raise serializers.ValidationError("El vehículo no coincide con la jornada.")
+            if (
+                vehiculo
+                and vehiculo.id != jornada.vehiculo_id
+            ):
+                raise serializers.ValidationError({
+                    "vehiculo": (
+                        "El vehículo no coincide con la jornada."
+                    )
+                })
 
-            if conductor and conductor.id != jornada.conductor_id:
-                raise serializers.ValidationError("El conductor no coincide con la jornada.")
-
-            if sucursal and sucursal.id != jornada.sucursal_id:
-                raise serializers.ValidationError("La sucursal no coincide con la jornada.")
+            if (
+                conductor
+                and conductor.id != jornada.conductor_id
+            ):
+                raise serializers.ValidationError({
+                    "conductor": (
+                        "El conductor no coincide con la jornada."
+                    )
+                })
 
         return attrs
 
 
 class AdelantoSerializer(serializers.ModelSerializer):
-    sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
+    sucursal_nombre = serializers.CharField(
+        source="sucursal.nombre",
+        read_only=True,
+    )
+
     conductor_nombre = serializers.SerializerMethodField()
-    estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
-    estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
+
+    estado_nombre = serializers.CharField(
+        source="estado.nombre",
+        read_only=True,
+    )
+
+    estado_codigo = serializers.CharField(
+        source="estado.codigo",
+        read_only=True,
+    )
+
     tipo = serializers.SerializerMethodField()
     tipo_display = serializers.SerializerMethodField()
 
     class Meta:
         model = Adelanto
+
         fields = [
             "id",
             "sucursal",
@@ -789,6 +986,7 @@ class AdelantoSerializer(serializers.ModelSerializer):
             "sucursal",
             "sucursal_nombre",
             "conductor_nombre",
+            "estado",
             "estado_nombre",
             "estado_codigo",
             "tipo",
@@ -797,9 +995,12 @@ class AdelantoSerializer(serializers.ModelSerializer):
         ]
 
         extra_kwargs = {
-            "estado": {
-                "required": False,
-                "allow_null": True,
+            "conductor": {
+                "required": True,
+                "allow_null": False,
+            },
+            "monto": {
+                "required": True,
             },
             "observacion": {
                 "required": False,
@@ -812,15 +1013,23 @@ class AdelantoSerializer(serializers.ModelSerializer):
         if not obj.conductor:
             return ""
 
-        return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
+        return (
+            f"{obj.conductor.nombre} "
+            f"{obj.conductor.apellido}"
+        ).strip()
 
     def get_tipo(self, obj):
         if not obj.estado:
             return "ADELANTO"
 
-        codigo = obj.estado.codigo.lower()
+        codigo = str(
+            obj.estado.codigo or ""
+        ).strip().lower()
 
-        if codigo in ["abono", "abonado"]:
+        if codigo in [
+            "abono",
+            "abonado",
+        ]:
             return "ABONO"
 
         return "ADELANTO"
@@ -829,25 +1038,50 @@ class AdelantoSerializer(serializers.ModelSerializer):
         if not obj.estado:
             return "Movimiento"
 
-        codigo = obj.estado.codigo.lower()
+        codigo = str(
+            obj.estado.codigo or ""
+        ).strip().lower()
 
-        if codigo in ["abono", "abonado"]:
+        if codigo in [
+            "abono",
+            "abonado",
+        ]:
             return "Abono"
 
         if codigo == "anticipo":
             return "Anticipo"
 
-        return "Adelanto"
+        if codigo == "adelanto":
+            return "Adelanto"
+
+        return obj.estado.nombre or "Movimiento"
 
     def validate(self, attrs):
-        monto = attrs.get("monto", getattr(self.instance, "monto", None))
+        monto = attrs.get(
+            "monto",
+            getattr(
+                self.instance,
+                "monto",
+                None,
+            ),
+        )
 
-        if monto is not None and monto <= Decimal("0.00"):
+        if (
+            monto is not None
+            and monto <= Decimal("0.00")
+        ):
             raise serializers.ValidationError({
-                "monto": "El monto debe ser mayor que cero."
+                "monto": (
+                    "El monto debe ser "
+                    "mayor que cero."
+                ),
             })
 
         return attrs
+
+
+
+
 class JornadaDiariaSerializer(serializers.ModelSerializer):
     sucursal_nombre = serializers.SerializerMethodField()
     conductor_nombre = serializers.SerializerMethodField()
@@ -910,6 +1144,7 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "pago_conductor",
             "total_adelantos",
             "pago_pendiente_conductor",
+            "porcentaje_pago_conductor",
             "saldo_adelanto_excedente",
             "total_gastos",
             "ganancia_dueno",

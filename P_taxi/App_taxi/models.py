@@ -119,17 +119,6 @@ class EstadoGasto(models.Model):
         return self.nombre
 
 
-class EstadoAdelanto(models.Model):
-    nombre = models.CharField(max_length=50)
-    codigo = models.CharField(max_length=50, unique=True)
-
-    class Meta:
-        verbose_name = "Estado de adelanto"
-        verbose_name_plural = "Estados de adelantos"
-        ordering = ["nombre"]
-
-    def __str__(self):
-        return self.nombre
 
 
 class TipoMantenimiento(models.Model):
@@ -179,22 +168,12 @@ class Conductor(models.Model):
     telefono = models.CharField(max_length=20, blank=True, null=True)
     cedula = models.CharField(max_length=30)
     direccion = models.TextField(blank=True, null=True)
-    licencia = models.CharField(max_length=50)
-    vencimiento_licencia = models.DateField(blank=True, null=True)
 
     numero_licencia = models.CharField(max_length=50, blank=True, null=True)
     fecha_inicio_licencia = models.DateField(blank=True, null=True)
     fecha_vencimiento_licencia = models.DateField(blank=True, null=True)
 
-    porcentaje_pago = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        default=Decimal("30.00"),
-        validators=[
-            MinValueValidator(Decimal("0.00")),
-            MaxValueValidator(Decimal("100.00"))
-        ]
-    )
+ 
 
     fecha_registro = models.DateTimeField(auto_now_add=True)
     activo = models.BooleanField(default=True)

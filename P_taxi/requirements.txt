@@ -1,5 +1,4 @@
 asgiref==3.11.1
-axios==0.4.0
 certifi==2026.2.25
 channels==4.3.2
 charset-normalizer==3.4.7
@@ -7,7 +6,6 @@ click==8.3.2
 colorama==0.4.6
 Django==5.0
 django-cors-headers==4.9.0
-django-environ==0.13.0
 django-filter==23.2
 djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
@@ -17,8 +15,6 @@ idna==3.12
 lxml==6.1.0
 markdown-it-py==4.0.0
 mdurl==0.1.2
-mysqlclient==2.2.8
-o==0.0.2b2
 openpyxl==3.1.5
 packaging==26.2
 pillow==12.2.0
@@ -33,4 +29,4 @@ sqlparse==0.5.5
 typing_extensions==4.15.0
 tzdata==2026.2
 urllib3==2.6.3
-wfastcgi==3.0.0
+whitenoise==6.12.0

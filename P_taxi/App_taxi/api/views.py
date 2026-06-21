@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.contrib.auth import authenticate
 from django.db.models import Q, Sum
 from django.utils import timezone
+from django.db.models.functions import TruncMonth
 
 from rest_framework import status, viewsets
 from rest_framework.authtoken.models import Token
@@ -767,7 +768,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             "sucursal",
             "estado",
             "conductor",
-            "vehiculo"
+            "vehiculo",
         ).prefetch_related(
             "gastos",
         ).all()
@@ -777,35 +778,64 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         fecha_fin = self.request.query_params.get("fecha_fin")
         conductor_id = self.request.query_params.get("conductor")
         vehiculo_id = self.request.query_params.get("vehiculo")
+        sucursal_id = self.request.query_params.get("sucursal")
 
+        # Filtrar según el rol
         if es_superadmin(user):
-            pass
+            # El superadministrador ve todas las jornadas.
+            # Solo se filtra por sucursal si la envía en la URL.
+            if sucursal_id:
+                qs = qs.filter(
+                    sucursal_id=sucursal_id
+                )
 
         elif es_admin_sucursal(user):
-            qs = qs.filter(sucursal=user.sucursal)
+            if not user.sucursal_id:
+                return qs.none()
+
+            qs = qs.filter(
+                sucursal_id=user.sucursal_id
+            )
 
         elif es_taxista(user):
-            qs = qs.filter(conductor__usuario=user)
+            qs = qs.filter(
+                conductor__usuario=user
+            )
 
         else:
             return qs.none()
 
+        # Filtros de fecha
         if fecha:
-            qs = qs.filter(fecha=fecha)
+            qs = qs.filter(
+                fecha=fecha
+            )
 
         if fecha_inicio:
-            qs = qs.filter(fecha__gte=fecha_inicio)
+            qs = qs.filter(
+                fecha__gte=fecha_inicio
+            )
 
         if fecha_fin:
-            qs = qs.filter(fecha__lte=fecha_fin)
+            qs = qs.filter(
+                fecha__lte=fecha_fin
+            )
 
+        # Filtros adicionales
         if conductor_id:
-            qs = qs.filter(conductor_id=conductor_id)
+            qs = qs.filter(
+                conductor_id=conductor_id
+            )
 
         if vehiculo_id:
-            qs = qs.filter(vehiculo_id=vehiculo_id)
+            qs = qs.filter(
+                vehiculo_id=vehiculo_id
+            )
 
-        return qs
+        return qs.order_by(
+            "-fecha",
+            "-id",
+        )
 
     def _obtener_porcentaje(self, sucursal):
         configuracion = obtener_configuracion_sucursal(sucursal)
@@ -1235,40 +1265,115 @@ class GastoViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        jornada = serializer.validated_data.get("jornada")
 
-        if not jornada:
-            vehiculo = serializer.validated_data.get("vehiculo")
-            conductor = serializer.validated_data.get("conductor")
-            sucursal = vehiculo.sucursal if vehiculo else None
-        else:
+        jornada = serializer.validated_data.get(
+            "jornada"
+        )
+
+        vehiculo = serializer.validated_data.get(
+            "vehiculo"
+        )
+
+        conductor = serializer.validated_data.get(
+            "conductor"
+        )
+
+        # Cuando se selecciona una jornada,
+        # el vehículo y el conductor pertenecen a ella.
+        if jornada:
             vehiculo = jornada.vehiculo
             conductor = jornada.conductor
-            sucursal = jornada.sucursal
 
-        if not sucursal:
-            raise ValidationError("No se pudo determinar la sucursal del gasto.")
+        if not vehiculo:
+            raise ValidationError({
+                "vehiculo": "Debes seleccionar un vehículo."
+            })
 
-        if es_admin_sucursal(user) and sucursal.id != user.sucursal_id:
-            raise PermissionDenied("No puedes registrar gastos en otra sucursal.")
+        if es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError({
+                    "sucursal": (
+                        "Tu usuario no tiene una sucursal asignada."
+                    )
+                })
 
-        if es_taxista(user):
+            sucursal = user.sucursal
+
+            if vehiculo.sucursal_id != user.sucursal_id:
+                raise PermissionDenied(
+                    "No puedes registrar gastos para "
+                    "vehículos de otra sucursal."
+                )
+
+            if (
+                conductor
+                and conductor.sucursal_id != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes registrar gastos para "
+                    "conductores de otra sucursal."
+                )
+
+            if (
+                jornada
+                and jornada.sucursal_id != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes registrar gastos en "
+                    "jornadas de otra sucursal."
+                )
+
+        elif es_superadmin(user):
+            # El superadministrador obtiene la sucursal
+            # automáticamente desde la jornada o el vehículo.
+            if jornada:
+                sucursal = jornada.sucursal
+            else:
+                sucursal = vehiculo.sucursal
+
+        elif es_taxista(user):
             try:
                 perfil = user.perfil_conductor
             except Conductor.DoesNotExist:
-                raise ValidationError("Este usuario no tiene perfil de conductor.")
+                raise ValidationError({
+                    "conductor": (
+                        "Este usuario no tiene perfil de conductor."
+                    )
+                })
 
-            if conductor and conductor.id != perfil.id:
-                raise PermissionDenied("No puedes registrar gastos para otro conductor.")
+            conductor = perfil
+            sucursal = perfil.sucursal
+
+            if vehiculo.sucursal_id != perfil.sucursal_id:
+                raise PermissionDenied(
+                    "No puedes registrar gastos para "
+                    "vehículos de otra sucursal."
+                )
+
+            if (
+                jornada
+                and jornada.conductor_id != perfil.id
+            ):
+                raise PermissionDenied(
+                    "No puedes registrar gastos en "
+                    "jornadas de otro conductor."
+                )
+
+        else:
+            raise PermissionDenied(
+                "No tienes permiso para registrar gastos."
+            )
 
         gasto = serializer.save(
             sucursal=sucursal,
             vehiculo=vehiculo,
-            conductor=conductor
+            conductor=conductor,
         )
 
         if gasto.jornada:
-            recalcular_totales_jornada(gasto.jornada)
+            recalcular_totales_jornada(
+                gasto.jornada
+            )
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -1873,67 +1978,593 @@ class ConfiguracionSistemaView(APIView):
 
         return Response(serializer.data)
 
+CODIGOS_ESTADOS_ANULADOS = [
+    "anulado",
+    "anulada",
+    "cancelado",
+    "cancelada",
+]
+
+
+def excluir_registros_anulados(queryset):
+    """
+    Excluye gastos o mantenimientos anulados.
+    Los registros sin estado continúan contabilizándose.
+    """
+    condicion = Q()
+
+    for codigo in CODIGOS_ESTADOS_ANULADOS:
+        condicion |= Q(
+            estado__codigo__iexact=codigo
+        )
+
+    return queryset.exclude(condicion)
+
+
+def obtener_querysets_dashboard(request):
+    """
+    Obtiene únicamente los registros que puede consultar
+    el usuario autenticado según su rol y sucursal.
+    """
+    user = request.user
+
+    jornadas = JornadaDiaria.objects.select_related(
+        "sucursal",
+        "conductor",
+        "vehiculo",
+        "estado",
+    ).all()
+
+    gastos = Gasto.objects.select_related(
+        "sucursal",
+        "conductor",
+        "vehiculo",
+        "estado",
+    ).all()
+
+    mantenimientos = Mantenimiento.objects.select_related(
+        "sucursal",
+        "vehiculo",
+        "estado",
+        "tipo_mantenimiento",
+    ).all()
+
+    vehiculos = Vehiculo.objects.select_related(
+        "sucursal",
+        "estado",
+    ).all()
+
+    if es_superadmin(user):
+        sucursal_id = request.query_params.get(
+            "sucursal"
+        )
+
+        if sucursal_id:
+            jornadas = jornadas.filter(
+                sucursal_id=sucursal_id
+            )
+
+            gastos = gastos.filter(
+                sucursal_id=sucursal_id
+            )
+
+            mantenimientos = mantenimientos.filter(
+                sucursal_id=sucursal_id
+            )
+
+            vehiculos = vehiculos.filter(
+                sucursal_id=sucursal_id
+            )
+
+    elif es_admin_sucursal(user):
+        if not user.sucursal:
+            raise ValidationError(
+                "Tu usuario no tiene una sucursal asignada."
+            )
+
+        jornadas = jornadas.filter(
+            sucursal=user.sucursal
+        )
+
+        gastos = gastos.filter(
+            sucursal=user.sucursal
+        )
+
+        mantenimientos = mantenimientos.filter(
+            sucursal=user.sucursal
+        )
+
+        vehiculos = vehiculos.filter(
+            sucursal=user.sucursal
+        )
+
+    elif es_taxista(user):
+        jornadas = jornadas.filter(
+            conductor__usuario=user
+        )
+
+        gastos = gastos.filter(
+            Q(conductor__usuario=user)
+            | Q(
+                vehiculo__asignaciones__conductor__usuario=user,
+                vehiculo__asignaciones__activa=True,
+            )
+        ).distinct()
+
+        mantenimientos = mantenimientos.filter(
+            vehiculo__asignaciones__conductor__usuario=user,
+            vehiculo__asignaciones__activa=True,
+        ).distinct()
+
+        vehiculos = vehiculos.filter(
+            asignaciones__conductor__usuario=user,
+            asignaciones__activa=True,
+        ).distinct()
+
+    else:
+        raise PermissionDenied(
+            "No tienes permisos para consultar el dashboard."
+        )
+
+    gastos = excluir_registros_anulados(
+        gastos
+    )
+
+    mantenimientos = excluir_registros_anulados(
+        mantenimientos
+    )
+
+    return {
+        "jornadas": jornadas,
+        "gastos": gastos,
+        "mantenimientos": mantenimientos,
+        "vehiculos": vehiculos,
+    }
+
+
+def calcular_resumen_financiero(
+    jornadas,
+    gastos,
+    mantenimientos,
+    fecha_inicio,
+    fecha_fin,
+):
+    """
+    Calcula los valores financieros directamente
+    desde las tablas correspondientes.
+    """
+    jornadas_periodo = jornadas.filter(
+        fecha__gte=fecha_inicio,
+        fecha__lte=fecha_fin,
+    )
+
+    gastos_periodo = gastos.filter(
+        fecha__gte=fecha_inicio,
+        fecha__lte=fecha_fin,
+    )
+
+    mantenimientos_periodo = mantenimientos.filter(
+        fecha__gte=fecha_inicio,
+        fecha__lte=fecha_fin,
+    )
+
+    ingresos = sumar_decimal(
+        jornadas_periodo,
+        "ingreso_bruto",
+    )
+
+    pago_conductores = sumar_decimal(
+        jornadas_periodo,
+        "pago_conductor",
+    )
+
+    gastos_vehiculos = sumar_decimal(
+        gastos_periodo,
+        "monto",
+    )
+
+    total_mantenimiento = sumar_decimal(
+        mantenimientos_periodo,
+        "costo",
+    )
+
+    kilometros = sumar_entero(
+        jornadas_periodo,
+        "kilometros_recorridos",
+    )
+
+    ganancia_base = (
+        Decimal(ingresos)
+        - Decimal(pago_conductores)
+    ).quantize(
+        Decimal("0.01")
+    )
+
+    gastos_operativos = (
+        Decimal(gastos_vehiculos)
+        + Decimal(total_mantenimiento)
+    ).quantize(
+        Decimal("0.01")
+    )
+
+    ganancia_real = (
+        ganancia_base
+        - gastos_operativos
+    ).quantize(
+        Decimal("0.01")
+    )
+
+    return {
+        "ingresos": ingresos,
+        "pago_conductores": pago_conductores,
+        "ganancia_base": ganancia_base,
+        "gastos_vehiculos": gastos_vehiculos,
+        "mantenimiento": total_mantenimiento,
+        "gastos_operativos": gastos_operativos,
+        "ganancia_real": ganancia_real,
+        "kilometros": kilometros,
+        "total_jornadas": jornadas_periodo.count(),
+    }
 
 class DashboardResumenView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
         hoy = timezone.localdate()
-        inicio_semana, _ = obtener_rango_periodo("semana")
-        inicio_mes, _ = obtener_rango_periodo("mes")
 
-        jornadas = JornadaDiaria.objects.all()
-        vehiculos = Vehiculo.objects.all()
+        inicio_semana, _ = obtener_rango_periodo(
+            "semana"
+        )
 
-        if es_superadmin(user):
-            sucursal_id = request.query_params.get("sucursal")
-            if sucursal_id:
-                jornadas = jornadas.filter(sucursal_id=sucursal_id)
-                vehiculos = vehiculos.filter(sucursal_id=sucursal_id)
+        inicio_mes, _ = obtener_rango_periodo(
+            "mes"
+        )
 
-        elif es_admin_sucursal(user):
-            jornadas = jornadas.filter(sucursal=user.sucursal)
-            vehiculos = vehiculos.filter(sucursal=user.sucursal)
+        querysets = obtener_querysets_dashboard(
+            request
+        )
 
-        elif es_taxista(user):
-            jornadas = jornadas.filter(sucursal=user.sucursal, conductor__usuario=user)
-            vehiculos = vehiculos.filter(
-                sucursal=user.sucursal,
-                asignaciones__conductor__usuario=user,
-                asignaciones__activa=True
-            ).distinct()
+        jornadas = querysets["jornadas"]
+        gastos = querysets["gastos"]
+        mantenimientos = querysets["mantenimientos"]
+        vehiculos = querysets["vehiculos"]
 
-        else:
-            return Response({"detail": "No tienes permisos."}, status=403)
+        resumen_dia = calcular_resumen_financiero(
+            jornadas=jornadas,
+            gastos=gastos,
+            mantenimientos=mantenimientos,
+            fecha_inicio=hoy,
+            fecha_fin=hoy,
+        )
 
-        jornadas_hoy = jornadas.filter(fecha=hoy)
-        jornadas_semana = jornadas.filter(fecha__gte=inicio_semana, fecha__lte=hoy)
-        jornadas_mes = jornadas.filter(fecha__gte=inicio_mes, fecha__lte=hoy)
+        resumen_semana = calcular_resumen_financiero(
+            jornadas=jornadas,
+            gastos=gastos,
+            mantenimientos=mantenimientos,
+            fecha_inicio=inicio_semana,
+            fecha_fin=hoy,
+        )
+
+        resumen_mes = calcular_resumen_financiero(
+            jornadas=jornadas,
+            gastos=gastos,
+            mantenimientos=mantenimientos,
+            fecha_inicio=inicio_mes,
+            fecha_fin=hoy,
+        )
 
         alertas = []
+
         for vehiculo in vehiculos:
-            alertas.extend(obtener_alertas_vehiculo(vehiculo))
+            alertas.extend(
+                obtener_alertas_vehiculo(
+                    vehiculo
+                )
+            )
 
         data = {
             "fecha": str(hoy),
-            "ingreso_dia": sumar_decimal(jornadas_hoy, "ingreso_bruto"),
-            "ingreso_semana": sumar_decimal(jornadas_semana, "ingreso_bruto"),
-            "ingreso_mes": sumar_decimal(jornadas_mes, "ingreso_bruto"),
-            "ganancia_dueno_dia": sumar_decimal(jornadas_hoy, "ganancia_dueno"),
-            "ganancia_dueno_semana": sumar_decimal(jornadas_semana, "ganancia_dueno"),
-            "ganancia_dueno_mes": sumar_decimal(jornadas_mes, "ganancia_dueno"),
-            "pago_taxistas_dia": sumar_decimal(jornadas_hoy, "pago_conductor"),
-            "gastos_dia": sumar_decimal(jornadas_hoy, "total_gastos"),
-            "km_dia": sumar_entero(jornadas_hoy, "kilometros_recorridos"),
-            "km_semana": sumar_entero(jornadas_semana, "kilometros_recorridos"),
-            "km_mes": sumar_entero(jornadas_mes, "kilometros_recorridos"),
+
+            # Día
+            "ingreso_dia": resumen_dia[
+                "ingresos"
+            ],
+            "pago_taxistas_dia": resumen_dia[
+                "pago_conductores"
+            ],
+            "ganancia_dueno_dia": resumen_dia[
+                "ganancia_base"
+            ],
+            "gastos_vehiculos_dia": resumen_dia[
+                "gastos_vehiculos"
+            ],
+            "mantenimiento_dia": resumen_dia[
+                "mantenimiento"
+            ],
+            "gastos_dia": resumen_dia[
+                "gastos_operativos"
+            ],
+            "ganancia_real_dueno_dia": resumen_dia[
+                "ganancia_real"
+            ],
+            "km_dia": resumen_dia[
+                "kilometros"
+            ],
+
+            # Semana
+            "ingreso_semana": resumen_semana[
+                "ingresos"
+            ],
+            "pago_taxistas_semana": resumen_semana[
+                "pago_conductores"
+            ],
+            "ganancia_dueno_semana": resumen_semana[
+                "ganancia_base"
+            ],
+            "gastos_vehiculos_semana": resumen_semana[
+                "gastos_vehiculos"
+            ],
+            "mantenimiento_semana": resumen_semana[
+                "mantenimiento"
+            ],
+            "gastos_semana": resumen_semana[
+                "gastos_operativos"
+            ],
+            "ganancia_real_dueno_semana": resumen_semana[
+                "ganancia_real"
+            ],
+            "km_semana": resumen_semana[
+                "kilometros"
+            ],
+
+            # Mes
+            "ingreso_mes": resumen_mes[
+                "ingresos"
+            ],
+            "pago_taxistas_mes": resumen_mes[
+                "pago_conductores"
+            ],
+            "ganancia_dueno_mes": resumen_mes[
+                "ganancia_base"
+            ],
+            "gastos_vehiculos_mes": resumen_mes[
+                "gastos_vehiculos"
+            ],
+            "mantenimiento_mes": resumen_mes[
+                "mantenimiento"
+            ],
+            "gastos_mes": resumen_mes[
+                "gastos_operativos"
+            ],
+            "ganancia_real_dueno_mes": resumen_mes[
+                "ganancia_real"
+            ],
+            "km_mes": resumen_mes[
+                "kilometros"
+            ],
+
             "vehiculos": vehiculos.count(),
-            "alertas_mantenimiento": len(alertas),
+            "alertas_mantenimiento": len(
+                alertas
+            ),
             "alertas": alertas,
         }
 
-        return Response(data)
+        return Response(
+            data,
+            status=status.HTTP_200_OK,
+        )
+    
+class DashboardFinancieroView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            anio = int(
+                request.query_params.get(
+                    "anio",
+                    timezone.localdate().year,
+                )
+            )
+        except (TypeError, ValueError):
+            raise ValidationError({
+                "anio": (
+                    "El año debe ser un número válido."
+                )
+            })
+
+        if anio < 2000 or anio > 2100:
+            raise ValidationError({
+                "anio": (
+                    "El año indicado no es válido."
+                )
+            })
+
+        querysets = obtener_querysets_dashboard(
+            request
+        )
+
+        jornadas = querysets[
+            "jornadas"
+        ].filter(
+            fecha__year=anio
+        )
+
+        gastos = querysets[
+            "gastos"
+        ].filter(
+            fecha__year=anio
+        )
+
+        mantenimientos = querysets[
+            "mantenimientos"
+        ].filter(
+            fecha__year=anio
+        )
+
+        jornadas_por_mes = (
+            jornadas
+            .annotate(
+                mes=TruncMonth("fecha")
+            )
+            .values("mes")
+            .annotate(
+                ingresos=Sum(
+                    "ingreso_bruto"
+                ),
+                pago_conductores=Sum(
+                    "pago_conductor"
+                ),
+                kilometros=Sum(
+                    "kilometros_recorridos"
+                ),
+            )
+            .order_by("mes")
+        )
+
+        gastos_por_mes = (
+            gastos
+            .annotate(
+                mes=TruncMonth("fecha")
+            )
+            .values("mes")
+            .annotate(
+                total=Sum("monto")
+            )
+            .order_by("mes")
+        )
+
+        mantenimientos_por_mes = (
+            mantenimientos
+            .annotate(
+                mes=TruncMonth("fecha")
+            )
+            .values("mes")
+            .annotate(
+                total=Sum("costo")
+            )
+            .order_by("mes")
+        )
+
+        mapa_jornadas = {
+            item["mes"].month: item
+            for item in jornadas_por_mes
+            if item["mes"]
+        }
+
+        mapa_gastos = {
+            item["mes"].month: (
+                item["total"]
+                or Decimal("0.00")
+            )
+            for item in gastos_por_mes
+            if item["mes"]
+        }
+
+        mapa_mantenimientos = {
+            item["mes"].month: (
+                item["total"]
+                or Decimal("0.00")
+            )
+            for item in mantenimientos_por_mes
+            if item["mes"]
+        }
+
+        resultado = []
+
+        for numero_mes in range(1, 13):
+            datos_jornada = mapa_jornadas.get(
+                numero_mes,
+                {}
+            )
+
+            ingresos = Decimal(
+                datos_jornada.get(
+                    "ingresos"
+                )
+                or "0.00"
+            )
+
+            pago_conductores = Decimal(
+                datos_jornada.get(
+                    "pago_conductores"
+                )
+                or "0.00"
+            )
+
+            kilometros = (
+                datos_jornada.get(
+                    "kilometros"
+                )
+                or 0
+            )
+
+            gastos_vehiculos = Decimal(
+                mapa_gastos.get(
+                    numero_mes,
+                    Decimal("0.00"),
+                )
+            )
+
+            mantenimiento = Decimal(
+                mapa_mantenimientos.get(
+                    numero_mes,
+                    Decimal("0.00"),
+                )
+            )
+
+            ganancia_base = (
+                ingresos
+                - pago_conductores
+            ).quantize(
+                Decimal("0.01")
+            )
+
+            gastos_operativos = (
+                gastos_vehiculos
+                + mantenimiento
+            ).quantize(
+                Decimal("0.01")
+            )
+
+            ganancia_real = (
+                ganancia_base
+                - gastos_operativos
+            ).quantize(
+                Decimal("0.01")
+            )
+
+            resultado.append({
+                "mes": (
+                    f"{anio}-"
+                    f"{numero_mes:02d}"
+                ),
+                "ingresos": ingresos,
+                "pago_conductores": (
+                    pago_conductores
+                ),
+                "ganancia_base": (
+                    ganancia_base
+                ),
+                "gastos_vehiculos": (
+                    gastos_vehiculos
+                ),
+                "mantenimiento": (
+                    mantenimiento
+                ),
+                "gastos_operativos": (
+                    gastos_operativos
+                ),
+                "ganancia_real": (
+                    ganancia_real
+                ),
+                "kilometros": kilometros,
+            })
+
+        return Response(
+            resultado,
+            status=status.HTTP_200_OK,
+        )
 
 
 class ReporteFinancieroView(APIView):
