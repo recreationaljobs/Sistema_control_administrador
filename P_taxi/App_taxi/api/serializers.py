@@ -157,7 +157,10 @@ class UsuarioSerializer(serializers.ModelSerializer):
         usuario_actual = request.user if request else None
 
         rol = attrs.get("rol") or getattr(self.instance, "rol", None)
-        sucursal = attrs.get("sucursal") or getattr(self.instance, "sucursal", None)
+        sucursal = attrs.get(
+            "sucursal",
+            getattr(self.instance, "sucursal", None),
+        )
         conductor_id = attrs.get("conductor_id", None)
 
         if not rol:
@@ -207,7 +210,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
                         "conductor_id": "Este taxista/conductor ya tiene un usuario asociado."
                     })
 
-                if codigo_usuario_actual == "superadmin":
+                if codigo_usuario_actual in ["superadmin", "super_admin"]:
                     if conductor.sucursal_id is not None:
                         raise serializers.ValidationError({
                             "conductor_id": "Desde el panel superadmin solo puedes crear usuarios para conductores del superadmin."
@@ -226,8 +229,12 @@ class UsuarioSerializer(serializers.ModelSerializer):
 
                 attrs["sucursal"] = conductor.sucursal
 
-        if codigo_rol in ["superadmin", "usuario_sistema"]:
-            attrs["sucursal"] = None
+        if codigo_rol in [
+                "superadmin",
+                "super_admin",
+                "usuario_sistema",
+            ]:
+                attrs["sucursal"] = None
 
         return attrs
 
@@ -602,7 +609,10 @@ class VehiculoSerializer(serializers.ModelSerializer):
         numero = attrs.get("numero", getattr(self.instance, "numero", None))
         placa = attrs.get("placa", getattr(self.instance, "placa", None))
 
-        if user.rol and user.rol.codigo == "superadmin":
+        if (
+            user.rol
+            and user.rol.codigo in ["superadmin", "super_admin"]
+        ):
             attrs["sucursal"] = None
 
             if numero:
@@ -767,7 +777,7 @@ class AsignacionVehiculoSerializer(serializers.ModelSerializer):
 
         codigo_rol = user.rol.codigo
 
-        if codigo_rol == "superadmin":
+        if codigo_rol in ["superadmin", "super_admin"]:
             if conductor.sucursal_id is not None:
                 raise serializers.ValidationError({
                     "conductor": "Desde el panel superadmin solo puedes asignar conductores del superadmin."
