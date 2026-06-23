@@ -592,6 +592,36 @@ class ConductorViewSet(viewsets.ModelViewSet):
         user = self.request.user
 
         if es_superadmin(user):
+            # Los conductores creados desde el entorno superadmin
+            # no pertenecen a ninguna sucursal.
+            serializer.save(sucursal=None)
+            return
+
+        if es_admin_sucursal(user):
+            if not user.sucursal_id:
+                raise ValidationError({
+                    "sucursal": (
+                        "Tu usuario no tiene una sucursal asignada."
+                    )
+                })
+
+            # El conductor pertenece automáticamente a la sucursal
+            # del administrador autenticado.
+            serializer.save(sucursal=user.sucursal)
+            return
+
+        raise PermissionDenied(
+            "No tienes permiso para crear conductores."
+        )
+
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        instance = self.get_object()
+
+        if es_superadmin(user):
+            # El superadministrador solamente puede modificar
+            # conductores de su propio entorno.
             if instance.sucursal_id is not None:
                 raise PermissionDenied(
                     "No puedes modificar conductores de una sucursal "
@@ -602,33 +632,24 @@ class ConductorViewSet(viewsets.ModelViewSet):
             return
 
         if es_admin_sucursal(user):
-            if not user.sucursal:
-                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+            if not user.sucursal_id:
+                raise ValidationError({
+                    "sucursal": (
+                        "Tu usuario no tiene una sucursal asignada."
+                    )
+                })
 
-            serializer.save(sucursal=user.sucursal)
-            return
-
-        raise PermissionDenied("No tienes permiso para crear conductores.")
-
-    def perform_update(self, serializer):
-        user = self.request.user
-        instance = self.get_object()
-        if es_superadmin(user):
-            sucursal = serializer.validated_data.get("sucursal", instance.sucursal)
-
-            if not sucursal:
-                raise ValidationError("Debes seleccionar la sucursal del conductor.")
-
-            serializer.save(sucursal=sucursal)
-            return
-        if es_admin_sucursal(user):
             if instance.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes modificar conductores de otra sucursal.")
+                raise PermissionDenied(
+                    "No puedes modificar conductores de otra sucursal."
+                )
 
             serializer.save(sucursal=user.sucursal)
             return
 
-        raise PermissionDenied("No tienes permiso para modificar conductores.")
+        raise PermissionDenied(
+            "No tienes permiso para modificar conductores."
+        )
 
     @action(
     detail=False,
