@@ -296,13 +296,7 @@ class AsignacionVehiculo(models.Model):
 
 class JornadaDiaria(models.Model):
 
-    liquidacion = models.ForeignKey(
-        "LiquidacionConductor",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="jornadas"
-    )
+   
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,

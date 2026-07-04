@@ -2,14 +2,19 @@ from rest_framework import permissions
 
 
 def rol_codigo(user):
-    if not user or not getattr(user, "is_authenticated", False):
+    if not user or not getattr(
+        user,
+        "is_authenticated",
+        False
+    ):
         return None
 
-    if not getattr(user, "rol", None):
+    rol = getattr(user, "rol", None)
+
+    if not rol or not rol.codigo:
         return None
 
-    return user.rol.codigo
-
+    return rol.codigo.strip().lower()
 
 def es_superadmin(user):
     return bool(

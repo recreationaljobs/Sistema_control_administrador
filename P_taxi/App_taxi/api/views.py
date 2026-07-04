@@ -398,9 +398,7 @@ class UsuarioViewSet(viewsets.ModelViewSet):
         # El superadministrador solamente ve sus usuarios:
         # usuarios que no pertenecen a ninguna sucursal.
         if es_superadmin(user):
-            return queryset.filter(
-                sucursal__isnull=True
-            )
+            return queryset
 
         # El administrador de sucursal solamente ve usuarios
         # pertenecientes a su misma sucursal.
@@ -651,63 +649,54 @@ class ConductorViewSet(viewsets.ModelViewSet):
             "No tienes permiso para modificar conductores."
         )
 
-    @action(
-    detail=False,
-    methods=["get"],
-    url_path="disponibles-usuario",
-)
+    @action(detail=False,methods=["get"],url_path="disponibles-usuario",
+        permission_classes=[EsAdminSucursalOSuperAdmin],)
     def disponibles_usuario(self, request):
-        user = request.user
+            """
+            Devuelve únicamente los conductores activos
+            que todavía no tienen un usuario asociado.
 
-        qs = Conductor.objects.select_related(
-            "sucursal",
-            "usuario",
-        ).filter(
-            usuario__isnull=True,
-            activo=True,
-        ).order_by(
-            "nombre",
-            "apellido",
-        )
+            Superadministrador:
+            - Solo conductores sin sucursal.
 
-        if es_superadmin(user):
-            # El superadministrador solo puede seleccionar
-            # conductores de su entorno.
-            qs = qs.filter(
-                sucursal__isnull=True
+            Administrador de sucursal:
+            - Solo conductores de su propia sucursal.
+            """
+
+            qs = self.get_queryset().filter(
+                usuario__isnull=True,
+                activo=True,
             )
 
-        elif es_admin_sucursal(user):
-            if not user.sucursal_id:
-                raise ValidationError(
-                    "Tu usuario no tiene una sucursal asignada."
+            search = request.query_params.get(
+                "search",
+                "",
+            ).strip()
+
+            if search:
+                qs = qs.filter(
+                    Q(nombre__icontains=search)
+                    | Q(apellido__icontains=search)
+                    | Q(cedula__icontains=search)
+                    | Q(
+                        numero_licencia__icontains=search
+                    )
                 )
 
-            qs = qs.filter(
-                sucursal_id=user.sucursal_id
+            qs = qs.order_by(
+                "nombre",
+                "apellido",
             )
 
-        else:
-            return Response([])
-
-        search = request.query_params.get(
-            "search",
-            "",
-        ).strip()
-
-        if search:
-            qs = qs.filter(
-                Q(nombre__icontains=search)
-                | Q(apellido__icontains=search)
-                | Q(cedula__icontains=search)
+            serializer = self.get_serializer(
+                qs,
+                many=True,
             )
 
-        serializer = self.get_serializer(
-            qs.distinct(),
-            many=True,
-        )
-
-        return Response(serializer.data)
+            return Response(
+                serializer.data,
+                status=status.HTTP_200_OK,
+            )
 
 class VehiculoViewSet(viewsets.ModelViewSet):
     serializer_class = VehiculoSerializer
@@ -1169,7 +1158,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             jornada
         )
 
-        def perform_update(self, serializer):
+    def perform_update(self, serializer):
             user = self.request.user
             instance = self.get_object()
 
