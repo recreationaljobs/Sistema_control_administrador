@@ -1128,6 +1128,8 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "kilometraje_final",
             "kilometros_recorridos",
             "ingreso_bruto",
+            "tipo_cobro",
+            "monto_alquiler",
             "porcentaje_pago_conductor",
             "pago_conductor",
             "total_adelantos",
@@ -1175,6 +1177,12 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
                 "allow_null": True,
             },
             "ingreso_bruto": {
+                "required": False,
+            },
+            "tipo_cobro": {
+                "required": False,
+            },
+            "monto_alquiler": {
                 "required": False,
             },
             "observaciones": {

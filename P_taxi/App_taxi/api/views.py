@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import authenticate
 from django.db.models import Q, Sum
@@ -1100,10 +1100,9 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             "kilometraje_final"
         )
 
-        ingreso_bruto = (
-            serializer.validated_data.get("ingreso_bruto")
-            or Decimal("0.00")
-        )
+       # Al iniciar la jornada todavía no se registra
+# el ingreso bruto. Este se ingresará al cerrarla.
+        ingreso_bruto = Decimal("0.00")
 
         if kilometraje_final is None:
             jornada = serializer.save(
@@ -1259,76 +1258,258 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             actualizar_kilometraje_vehiculo(vehiculo, jornada.kilometraje_final)
             recalcular_totales_jornada(jornada)
 
-    @action(detail=True, methods=["patch"], url_path="cerrar")
-    def cerrar(self, request, pk=None):
-        jornada = self.get_object()
-        user = request.user
-
-        if es_taxista(user):
-            if jornada.conductor.usuario_id != user.id:
-                raise PermissionDenied("No puedes cerrar una jornada de otro conductor.")
-
-        elif es_admin_sucursal(user):
-            if jornada.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes cerrar jornadas de otra sucursal.")
-
-        elif es_superadmin(user):
-            pass
-
-        else:
-            raise PermissionDenied("No tienes permiso para cerrar jornadas.")
-
-        if jornada.kilometraje_final is not None:
-            raise ValidationError({
-                "detail": "Esta jornada ya fue cerrada."
-            })
-
-        kilometraje_final = request.data.get("kilometraje_final")
-
-        if kilometraje_final in [None, ""]:
-            raise ValidationError({
-                "kilometraje_final": "Debes ingresar el kilometraje final."
-            })
-
-        try:
-            kilometraje_final = int(kilometraje_final)
-        except ValueError:
-            raise ValidationError({
-                "kilometraje_final": "El kilometraje final debe ser un número válido."
-            })
-
-        if kilometraje_final < jornada.kilometraje_inicial:
-            raise ValidationError({
-                "kilometraje_final": "El kilometraje final no puede ser menor al kilometraje inicial."
-            })
-
-        porcentaje = self._obtener_porcentaje(jornada.sucursal)
-
-        campos_calculados = calcular_campos_jornada(
-            jornada.kilometraje_inicial,
-            kilometraje_final,
-            jornada.ingreso_bruto or Decimal("0.00"),
-            porcentaje
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path="cerrar"
         )
+    def cerrar(self, request, pk=None):
+            jornada = self.get_object()
+            user = request.user
 
-        jornada.kilometraje_final = kilometraje_final
-        jornada.porcentaje_pago_conductor = porcentaje
-        jornada.kilometros_recorridos = campos_calculados["kilometros_recorridos"]
-        jornada.pago_conductor = campos_calculados["pago_conductor"]
+            if es_taxista(user):
+                if jornada.conductor.usuario_id != user.id:
+                    raise PermissionDenied(
+                        "No puedes cerrar una jornada de otro conductor."
+                    )
 
-        observaciones = request.data.get("observaciones")
-        if observaciones is not None:
-            jornada.observaciones = observaciones
+            elif es_admin_sucursal(user):
+                if not user.sucursal_id:
+                    raise ValidationError({
+                        "sucursal": (
+                            "Tu usuario no tiene una sucursal asignada."
+                        )
+                    })
 
-        jornada.save()
+                if jornada.sucursal_id != user.sucursal_id:
+                    raise PermissionDenied(
+                        "No puedes cerrar jornadas de otra sucursal."
+                    )
 
-        actualizar_kilometraje_vehiculo(jornada.vehiculo, jornada.kilometraje_final)
-        recalcular_totales_jornada(jornada)
+            elif es_superadmin(user):
+                pass
 
-        serializer = self.get_serializer(jornada)
-        return Response(serializer.data)
+            else:
+                raise PermissionDenied(
+                    "No tienes permiso para cerrar jornadas."
+                )
 
+            if jornada.kilometraje_final is not None:
+                raise ValidationError({
+                    "detail": "Esta jornada ya fue cerrada."
+                })
 
+            kilometraje_final = request.data.get(
+                "kilometraje_final"
+            )
+
+            if kilometraje_final in [None, ""]:
+                raise ValidationError({
+                    "kilometraje_final": (
+                        "Debes ingresar el kilometraje final."
+                    )
+                })
+
+            try:
+                kilometraje_final = int(
+                    kilometraje_final
+                )
+            except (TypeError, ValueError):
+                raise ValidationError({
+                    "kilometraje_final": (
+                        "El kilometraje final debe ser "
+                        "un número válido."
+                    )
+                })
+
+            if kilometraje_final < jornada.kilometraje_inicial:
+                raise ValidationError({
+                    "kilometraje_final": (
+                        "El kilometraje final no puede ser "
+                        "menor al kilometraje inicial."
+                    )
+                })
+
+            tipo_cobro = str(
+                request.data.get(
+                    "tipo_cobro",
+                    "porcentaje"
+                )
+            ).strip().lower()
+
+            if tipo_cobro not in [
+                "porcentaje",
+                "alquiler",
+            ]:
+                raise ValidationError({
+                    "tipo_cobro": (
+                        "El tipo de cobro debe ser "
+                        "porcentaje o alquiler."
+                    )
+                })
+
+            if tipo_cobro == "porcentaje":
+                valor_ingreso = request.data.get(
+                    "ingreso_bruto"
+                )
+
+                if valor_ingreso in [None, ""]:
+                    raise ValidationError({
+                        "ingreso_bruto": (
+                            "Debes ingresar el ingreso bruto "
+                            "generado durante la jornada."
+                        )
+                    })
+
+                try:
+                    ingreso_bruto = Decimal(
+                        str(valor_ingreso)
+                    ).quantize(
+                        Decimal("0.01")
+                    )
+                except (
+                    InvalidOperation,
+                    TypeError,
+                    ValueError,
+                ):
+                    raise ValidationError({
+                        "ingreso_bruto": (
+                            "El ingreso bruto debe ser "
+                            "un monto válido."
+                        )
+                    })
+
+                if ingreso_bruto < Decimal("0.00"):
+                    raise ValidationError({
+                        "ingreso_bruto": (
+                            "El ingreso bruto no puede ser negativo."
+                        )
+                    })
+
+                porcentaje = self._obtener_porcentaje(
+                    jornada.sucursal
+                )
+
+                campos_calculados = calcular_campos_jornada(
+                    jornada.kilometraje_inicial,
+                    kilometraje_final,
+                    ingreso_bruto,
+                    porcentaje,
+                )
+
+                jornada.tipo_cobro = "porcentaje"
+                jornada.ingreso_bruto = ingreso_bruto
+                jornada.monto_alquiler = Decimal("0.00")
+                jornada.porcentaje_pago_conductor = porcentaje
+                jornada.pago_conductor = (
+                    campos_calculados["pago_conductor"]
+                )
+
+            else:
+                valor_alquiler = request.data.get(
+                    "monto_alquiler"
+                )
+
+                if valor_alquiler in [None, ""]:
+                    raise ValidationError({
+                        "monto_alquiler": (
+                            "Debes ingresar el monto de alquiler."
+                        )
+                    })
+
+                try:
+                    monto_alquiler = Decimal(
+                        str(valor_alquiler)
+                    ).quantize(
+                        Decimal("0.01")
+                    )
+                except (
+                    InvalidOperation,
+                    TypeError,
+                    ValueError,
+                ):
+                    raise ValidationError({
+                        "monto_alquiler": (
+                            "El monto de alquiler debe ser "
+                            "un valor válido."
+                        )
+                    })
+
+                if monto_alquiler < Decimal("0.00"):
+                    raise ValidationError({
+                        "monto_alquiler": (
+                            "El monto de alquiler no puede ser negativo."
+                        )
+                    })
+
+                campos_calculados = calcular_campos_jornada(
+                    jornada.kilometraje_inicial,
+                    kilometraje_final,
+                    monto_alquiler,
+                    Decimal("0.00"),
+                )
+
+                jornada.tipo_cobro = "alquiler"
+                jornada.monto_alquiler = monto_alquiler
+
+                # Se utiliza también como ingreso total para los
+                # reportes financieros y el cálculo de ganancia.
+                jornada.ingreso_bruto = monto_alquiler
+
+                jornada.porcentaje_pago_conductor = Decimal(
+                    "0.00"
+                )
+
+                jornada.pago_conductor = Decimal(
+                    "0.00"
+                )
+
+            jornada.kilometraje_final = kilometraje_final
+
+            jornada.kilometros_recorridos = (
+                campos_calculados["kilometros_recorridos"]
+            )
+
+            observaciones = request.data.get(
+                "observaciones"
+            )
+
+            if observaciones is not None:
+                jornada.observaciones = observaciones
+
+            jornada.save(
+                update_fields=[
+                    "kilometraje_final",
+                    "kilometros_recorridos",
+                    "tipo_cobro",
+                    "ingreso_bruto",
+                    "monto_alquiler",
+                    "porcentaje_pago_conductor",
+                    "pago_conductor",
+                    "observaciones",
+                ]
+            )
+
+            actualizar_kilometraje_vehiculo(
+                jornada.vehiculo,
+                jornada.kilometraje_final,
+            )
+
+            recalcular_totales_jornada(
+                jornada
+            )
+
+            jornada.refresh_from_db()
+
+            serializer = self.get_serializer(
+                jornada
+            )
+
+            return Response(
+                serializer.data,
+                status=status.HTTP_200_OK,
+            )
+    
     @action(detail=True, methods=["patch"], url_path="registrar-ingreso")
     def registrar_ingreso(self, request, pk=None):
         jornada = self.get_object()

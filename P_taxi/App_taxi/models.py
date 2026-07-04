@@ -296,6 +296,11 @@ class AsignacionVehiculo(models.Model):
 
 class JornadaDiaria(models.Model):
 
+    TIPO_COBRO_CHOICES = (
+        ("porcentaje", "Porcentaje"),
+        ("alquiler", "Alquiler"),
+    )
+
    
     sucursal = models.ForeignKey(
         Sucursal,
@@ -335,6 +340,18 @@ class JornadaDiaria(models.Model):
     kilometros_recorridos = models.PositiveIntegerField(default=0)
 
     ingreso_bruto = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    tipo_cobro = models.CharField(
+        max_length=20,
+        choices=TIPO_COBRO_CHOICES,
+        default="porcentaje"
+    )
+
+    monto_alquiler = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         default=Decimal("0.00")
