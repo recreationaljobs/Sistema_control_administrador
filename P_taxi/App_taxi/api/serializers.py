@@ -300,6 +300,9 @@ class ConductorSerializer(serializers.ModelSerializer):
             "direccion",
             "licencia",
             "vencimiento_licencia",
+            "numero_licencia",
+            "fecha_inicio_licencia",
+            "fecha_vencimiento_licencia",
             "fecha_registro",
             "activo",
         ]

@@ -190,6 +190,10 @@ class Conductor(models.Model):
     licencia = models.CharField(max_length=50)
     vencimiento_licencia = models.DateField(blank=True, null=True)
 
+    numero_licencia = models.CharField(max_length=50, blank=True, null=True)
+    fecha_inicio_licencia = models.DateField(blank=True, null=True)
+    fecha_vencimiento_licencia = models.DateField(blank=True, null=True)
+
     porcentaje_pago = models.DecimalField(
         max_digits=5,
         decimal_places=2,
