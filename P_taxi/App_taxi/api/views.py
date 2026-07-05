@@ -240,6 +240,9 @@ class UsuarioViewSet(viewsets.ModelViewSet):
         if self.action in ["me"]:
             return [IsAuthenticated()]
 
+        if self.action in ["dar_baja", "reactivar"]:
+            return [EsSuperAdmin()]
+
         return [EsAdminSucursalOSuperAdmin()]
 
     def get_queryset(self):
@@ -273,6 +276,37 @@ class UsuarioViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
     def me(self, request):
         return Response(self.get_serializer(request.user).data)
+
+    @action(detail=True, methods=["post"], url_path="dar-baja")
+    def dar_baja(self, request, pk=None):
+        usuario = self.get_object()
+
+        # Proteccion: no se puede dar de baja a un superadmin.
+        if es_superadmin(usuario):
+            raise PermissionDenied("No puedes dar de baja a un superadmin.")
+
+        usuario.is_active = False
+        usuario.save(update_fields=["is_active"])
+
+        # Revoca los tokens activos para forzar el cierre de sesion.
+        Token.objects.filter(user=usuario).delete()
+
+        return Response(
+            self.get_serializer(usuario).data,
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=["post"], url_path="reactivar")
+    def reactivar(self, request, pk=None):
+        usuario = self.get_object()
+
+        usuario.is_active = True
+        usuario.save(update_fields=["is_active"])
+
+        return Response(
+            self.get_serializer(usuario).data,
+            status=status.HTTP_200_OK
+        )
 
     def perform_create(self, serializer):
         user = self.request.user
