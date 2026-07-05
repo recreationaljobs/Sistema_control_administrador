@@ -303,6 +303,7 @@ class ConductorSerializer(serializers.ModelSerializer):
             "numero_licencia",
             "fecha_inicio_licencia",
             "fecha_vencimiento_licencia",
+            "porcentaje_pago",
             "fecha_registro",
             "activo",
         ]
@@ -318,6 +319,10 @@ class ConductorSerializer(serializers.ModelSerializer):
                 "allow_null": True,
             },
             "usuario": {
+                "required": False,
+                "allow_null": True,
+            },
+            "porcentaje_pago": {
                 "required": False,
                 "allow_null": True,
             },

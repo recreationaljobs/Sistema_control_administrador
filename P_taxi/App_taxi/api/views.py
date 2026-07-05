@@ -353,15 +353,22 @@ class ConductorViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
 
+        # Si no se envia porcentaje_pago, se usa el % por defecto de la sucursal.
+        porcentaje = serializer.validated_data.get("porcentaje_pago")
+
         if es_superadmin(user):
-            serializer.save(sucursal=None)
+            if porcentaje is None:
+                porcentaje = obtener_configuracion_sucursal(None).porcentaje_pago_conductor
+            serializer.save(sucursal=None, porcentaje_pago=porcentaje)
             return
 
         if es_admin_sucursal(user):
             if not user.sucursal:
                 raise ValidationError("Tu usuario no tiene una sucursal asignada.")
 
-            serializer.save(sucursal=user.sucursal)
+            if porcentaje is None:
+                porcentaje = obtener_configuracion_sucursal(user.sucursal).porcentaje_pago_conductor
+            serializer.save(sucursal=user.sucursal, porcentaje_pago=porcentaje)
             return
 
         raise PermissionDenied("No tienes permiso para crear conductores.")
@@ -370,18 +377,36 @@ class ConductorViewSet(viewsets.ModelViewSet):
         user = self.request.user
         instance = self.get_object()
 
+        # El % solo se toca si llega en el request. Si llega null/vacio -> default
+        # de la sucursal; si llega con valor (incluido 0 explicito) se respeta;
+        # si no llega, se conserva el valor actual del conductor.
+        actualizar_porcentaje = "porcentaje_pago" in serializer.validated_data
+        porcentaje = serializer.validated_data.get("porcentaje_pago")
+
         if es_superadmin(user):
             if instance.sucursal_id is not None:
                 raise PermissionDenied("No puedes modificar conductores de una sucursal desde el panel superadmin.")
 
-            serializer.save(sucursal=None)
+            if actualizar_porcentaje and porcentaje is None:
+                porcentaje = obtener_configuracion_sucursal(None).porcentaje_pago_conductor
+
+            if actualizar_porcentaje:
+                serializer.save(sucursal=None, porcentaje_pago=porcentaje)
+            else:
+                serializer.save(sucursal=None)
             return
 
         if es_admin_sucursal(user):
             if instance.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes modificar conductores de otra sucursal.")
 
-            serializer.save(sucursal=user.sucursal)
+            if actualizar_porcentaje and porcentaje is None:
+                porcentaje = obtener_configuracion_sucursal(user.sucursal).porcentaje_pago_conductor
+
+            if actualizar_porcentaje:
+                serializer.save(sucursal=user.sucursal, porcentaje_pago=porcentaje)
+            else:
+                serializer.save(sucursal=user.sucursal)
             return
 
         raise PermissionDenied("No tienes permiso para modificar conductores.")
@@ -674,9 +699,20 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
 
         return qs
 
-    def _obtener_porcentaje(self, sucursal):
+    def _obtener_porcentaje_fallback(self, sucursal):
+        # Fallback: % por defecto de la config de la sucursal (o global).
         configuracion = obtener_configuracion_sucursal(sucursal)
         return configuracion.porcentaje_pago_conductor
+
+    def _resolver_porcentaje(self, conductor, sucursal):
+        # Flujo principal: el % lo define el conductor. Si el conductor no tiene
+        # un % propio (None o 0), se cae al % por defecto de la sucursal.
+        porcentaje = getattr(conductor, "porcentaje_pago", None)
+
+        if porcentaje is None or Decimal(porcentaje) == Decimal("0.00"):
+            return self._obtener_porcentaje_fallback(sucursal)
+
+        return porcentaje
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -756,7 +792,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
                 "detail": "Ya existe una jornada para este conductor y vehículo en esta fecha. Debes cerrar la jornada existente, no crear otra."
             })
 
-        porcentaje = self._obtener_porcentaje(sucursal)
+        porcentaje = self._resolver_porcentaje(conductor, sucursal)
 
         jornada = serializer.save(
             sucursal=sucursal,
@@ -838,7 +874,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         if not asignacion_activa:
             raise ValidationError("El conductor no tiene una asignación activa con ese vehículo.")
 
-        porcentaje = self._obtener_porcentaje(sucursal)
+        porcentaje = self._resolver_porcentaje(conductor, sucursal)
 
         km_inicial = serializer.validated_data.get(
             "kilometraje_inicial",
@@ -919,7 +955,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         else:
             raise PermissionDenied("No tienes permiso para cerrar esta jornada.")
 
-        porcentaje = self._obtener_porcentaje(jornada.sucursal)
+        porcentaje = self._resolver_porcentaje(jornada.conductor, jornada.sucursal)
 
         campos_calculados = calcular_campos_jornada(
             jornada.kilometraje_inicial,
@@ -971,14 +1007,14 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
 
         ingreso_bruto = Decimal(str(request.data.get("ingreso_bruto", "0.00") or "0.00"))
         monto_alquiler = Decimal(str(request.data.get("monto_alquiler", "0.00") or "0.00"))
-        porcentaje = Decimal(
-            str(
-                request.data.get(
-                    "porcentaje_pago_conductor",
-                    jornada.porcentaje_pago_conductor or "30.00"
-                )
-            )
-        )
+
+        # Prioridad del %: body explicito > conductor.porcentaje_pago > config de sucursal.
+        porcentaje_body = request.data.get("porcentaje_pago_conductor")
+
+        if porcentaje_body not in (None, ""):
+            porcentaje = Decimal(str(porcentaje_body))
+        else:
+            porcentaje = self._resolver_porcentaje(jornada.conductor, jornada.sucursal)
 
         if tipo_cobro == "porcentaje":
             if ingreso_bruto < 0:
