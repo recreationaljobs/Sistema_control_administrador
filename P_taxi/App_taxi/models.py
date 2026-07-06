@@ -143,6 +143,7 @@ class TipoMantenimiento(models.Model):
     nombre = models.CharField(max_length=80)
     codigo = models.CharField(max_length=50, unique=True)
     activo = models.BooleanField(default=True)
+    intervalo_km = models.PositiveIntegerField(default=5000)
 
     class Meta:
         verbose_name = "Tipo de mantenimiento"
@@ -673,6 +674,10 @@ class ConfiguracionSistema(models.Model):
     intervalo_cambio_aceite_km = models.PositiveIntegerField(default=5000)
     intervalo_mantenimiento_km = models.PositiveIntegerField(default=10000)
     alerta_previa_km = models.PositiveIntegerField(default=300)
+
+    # Km antes del punto de cambio en que se dispara el aviso de aceite.
+    km_aviso_mantenimiento = models.PositiveIntegerField(default=30)
+
     moneda = models.CharField(max_length=10, default="C$")
 
     class Meta:

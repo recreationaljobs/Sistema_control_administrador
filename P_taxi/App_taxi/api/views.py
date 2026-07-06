@@ -73,6 +73,8 @@ from .services import (
     actualizar_kilometraje_vehiculo,
     aplicar_mantenimiento_en_vehiculo,
     obtener_alertas_vehiculo,
+    construir_alerta_km_aceite,
+    construir_alerta_licencia,
     sumar_decimal,
     sumar_entero,
 )
@@ -1965,15 +1967,21 @@ class AlertasMantenimientoView(APIView):
 
     def get(self, request):
         user = request.user
+        hoy = timezone.localdate()
+        ahora = timezone.now().isoformat()
+
         vehiculos = Vehiculo.objects.select_related("sucursal", "estado").all()
+        conductores = Conductor.objects.select_related("sucursal").filter(activo=True)
 
         if es_superadmin(user):
             sucursal_id = request.query_params.get("sucursal")
             if sucursal_id:
                 vehiculos = vehiculos.filter(sucursal_id=sucursal_id)
+                conductores = conductores.filter(sucursal_id=sucursal_id)
 
         elif es_admin_sucursal(user):
             vehiculos = vehiculos.filter(sucursal=user.sucursal)
+            conductores = conductores.filter(sucursal=user.sucursal)
 
         elif es_taxista(user):
             vehiculos = vehiculos.filter(
@@ -1981,14 +1989,42 @@ class AlertasMantenimientoView(APIView):
                 asignaciones__conductor__usuario=user,
                 asignaciones__activa=True
             ).distinct()
+            conductores = conductores.filter(usuario=user)
 
         else:
             return Response({"detail": "No tienes permisos."}, status=403)
 
+        # Tipo de mantenimiento "aceite" (se crea si no existe en el catálogo).
+        tipo_aceite, _ = TipoMantenimiento.objects.get_or_create(
+            codigo="aceite",
+            defaults={"nombre": "Cambio de aceite", "intervalo_km": 5000},
+        )
+
+        config_cache = {}
+
+        def config_de(sucursal):
+            clave = sucursal.id if sucursal else None
+            if clave not in config_cache:
+                config_cache[clave] = obtener_configuracion_sucursal(sucursal)
+            return config_cache[clave]
+
         alertas = []
 
         for vehiculo in vehiculos:
-            alertas.extend(obtener_alertas_vehiculo(vehiculo))
+            alerta = construir_alerta_km_aceite(
+                vehiculo, config_de(vehiculo.sucursal), tipo_aceite, ahora
+            )
+            if alerta:
+                alertas.append(alerta)
+
+        for conductor in conductores:
+            alerta = construir_alerta_licencia(conductor, hoy, ahora)
+            if alerta:
+                alertas.append(alerta)
+
+        # Más urgentes primero.
+        orden = {"critical": 0, "warning": 1, "info": 2}
+        alertas.sort(key=lambda a: orden.get(a["severidad"], 3))
 
         return Response(alertas)
 

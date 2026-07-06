@@ -11,6 +11,7 @@ from ..models import (
     Gasto,
     Adelanto,
     Vehiculo,
+    Mantenimiento,
 )
 
 
@@ -224,6 +225,102 @@ def obtener_alertas_vehiculo(vehiculo):
         })
 
     return alertas
+
+
+def construir_alerta_km_aceite(vehiculo, config, tipo_aceite, fecha_creacion):
+    """Alerta de cambio de aceite basada en el último Mantenimiento de tipo
+    'aceite'. Umbral = último_km + intervalo - km_de_aviso. Devuelve None si el
+    vehículo aún no llega al umbral."""
+    intervalo = (
+        config.intervalo_cambio_aceite_km
+        or (tipo_aceite.intervalo_km if tipo_aceite else 0)
+        or 5000
+    )
+    aviso = config.km_aviso_mantenimiento or 0
+
+    ultimo = (
+        Mantenimiento.objects
+        .filter(vehiculo=vehiculo, tipo_mantenimiento__codigo="aceite")
+        .order_by("-kilometraje", "-fecha", "-id")
+        .first()
+    )
+    base = ultimo.kilometraje if ultimo else 0
+
+    km_actual = vehiculo.kilometraje_actual or 0
+    proximo = base + intervalo
+    umbral = proximo - aviso
+
+    if km_actual < umbral:
+        return None
+
+    faltan = proximo - km_actual  # negativo si ya está vencido
+    vencido = km_actual >= proximo
+
+    if vencido:
+        severidad = "critical"
+        exceso = km_actual - proximo
+        mensaje = (
+            f"El vehículo {vehiculo.placa} necesita cambio de aceite"
+            + (f" (lleva {exceso} km de más)." if exceso > 0 else ".")
+        )
+    else:
+        severidad = "warning"
+        mensaje = (
+            f"El vehículo {vehiculo.placa} está a {faltan} km del cambio de aceite."
+        )
+
+    return {
+        "id": f"mantenimiento_km-{vehiculo.id}",
+        "tipo": "mantenimiento_km",
+        "severidad": severidad,
+        "mensaje": mensaje,
+        "fecha_creacion": fecha_creacion,
+        "link": f"/vehiculos/{vehiculo.id}",
+        "vehiculo_id": vehiculo.id,
+        "vehiculo": vehiculo.placa,
+        "kilometraje_actual": km_actual,
+        "proximo_km": proximo,
+        "faltan_km": faltan,
+    }
+
+
+def construir_alerta_licencia(conductor, hoy, fecha_creacion):
+    """Alerta de vencimiento de licencia por conductor activo. Severidad según
+    días restantes: <=7 o vencida -> critical, 8-15 -> warning, 16-30 -> info."""
+    venc = conductor.fecha_vencimiento_licencia
+    if not venc:
+        return None
+
+    dias = (venc - hoy).days
+    nombre = f"{conductor.nombre} {conductor.apellido}".strip()
+
+    if dias < 0:
+        severidad = "critical"
+        mensaje = f"Licencia de {nombre} vencida hace {abs(dias)} días."
+    elif dias <= 7:
+        severidad = "critical"
+        mensaje = f"La licencia de {nombre} vence en {dias} días."
+    elif dias <= 15:
+        severidad = "warning"
+        mensaje = f"La licencia de {nombre} vence en {dias} días."
+    elif dias <= 30:
+        severidad = "info"
+        mensaje = f"La licencia de {nombre} vence en {dias} días."
+    else:
+        return None
+
+    return {
+        "id": f"licencia_vencimiento-{conductor.id}",
+        "tipo": "licencia_vencimiento",
+        "severidad": severidad,
+        "mensaje": mensaje,
+        "fecha_creacion": fecha_creacion,
+        "link": f"/conductores/{conductor.id}",
+        "conductor_id": conductor.id,
+        "conductor": nombre,
+        "fecha_vencimiento": str(venc),
+        "dias_restantes": dias,
+    }
 
 
 def sumar_decimal(queryset, campo):

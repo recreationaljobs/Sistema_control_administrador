@@ -1204,6 +1204,7 @@ class ConfiguracionSistemaSerializer(serializers.ModelSerializer):
             "intervalo_cambio_aceite_km",
             "intervalo_mantenimiento_km",
             "alerta_previa_km",
+            "km_aviso_mantenimiento",
             "moneda",
         ]
         read_only_fields = ["id", "sucursal_nombre"]
