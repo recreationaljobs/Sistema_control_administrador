@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.db.models import Q
@@ -318,6 +319,40 @@ class AsignacionVehiculo(models.Model):
                 name="unique_conductor_activo"
             ),
         ]
+
+    def clean(self):
+        super().clean()
+
+        # Solo las asignaciones activas compiten por vehículo/conductor.
+        if not self.activa:
+            return
+
+        conflicto_vehiculo = (
+            AsignacionVehiculo.objects
+            .filter(vehiculo=self.vehiculo, activa=True)
+            .exclude(pk=self.pk)
+            .select_related("conductor")
+            .first()
+        )
+        if conflicto_vehiculo:
+            c = conflicto_vehiculo.conductor
+            raise ValidationError(
+                f"El vehículo {self.vehiculo.placa} ya está asignado al conductor "
+                f"{c.nombre} {c.apellido}."
+            )
+
+        conflicto_conductor = (
+            AsignacionVehiculo.objects
+            .filter(conductor=self.conductor, activa=True)
+            .exclude(pk=self.pk)
+            .select_related("vehiculo")
+            .first()
+        )
+        if conflicto_conductor:
+            raise ValidationError(
+                f"El conductor {self.conductor.nombre} {self.conductor.apellido} "
+                f"ya tiene otro vehículo asignado ({conflicto_conductor.vehiculo.placa})."
+            )
 
     def __str__(self):
         return f"{self.conductor} - {self.vehiculo.placa}"

@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import authenticate
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q, Sum
 from django.utils import timezone
 
@@ -487,6 +488,69 @@ class ConductorViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(qs.distinct(), many=True)
         return Response(serializer.data)
 
+    @action(detail=False, methods=["get"], url_path="disponibles")
+    def disponibles(self, request):
+        # Conductores activos que NO tienen una asignación activa. Sirve para
+        # los dropdowns de asignación (solo conductores libres).
+        qs = self.get_queryset().filter(activo=True).exclude(
+            asignaciones__activa=True
+        )
+
+        # Al editar una asignación se debe poder conservar su conductor actual.
+        asignacion_id = request.query_params.get("asignacion")
+        if asignacion_id:
+            actual = AsignacionVehiculo.objects.filter(
+                pk=asignacion_id, activa=True
+            ).values_list("conductor_id", flat=True).first()
+            if actual:
+                qs = self.get_queryset().filter(activo=True).filter(
+                    Q(pk=actual) | ~Q(asignaciones__activa=True)
+                )
+
+        serializer = self.get_serializer(qs.distinct(), many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="despedir",
+            permission_classes=[EsAdminSucursalOSuperAdmin])
+    def despedir(self, request, pk=None):
+        conductor = self.get_object()
+        user = request.user
+
+        if es_admin_sucursal(user) and conductor.sucursal_id != user.sucursal_id:
+            raise PermissionDenied("No puedes despedir conductores de otra sucursal.")
+
+        conductor.activo = False
+        conductor.save(update_fields=["activo"])
+
+        # Libera el vehículo cerrando la asignación activa.
+        asignacion = conductor.asignaciones.filter(activa=True).first()
+        if asignacion:
+            asignacion.activa = False
+            asignacion.fecha_fin = timezone.localdate()
+            asignacion.save(update_fields=["activa", "fecha_fin"])
+
+        return Response(
+            self.get_serializer(conductor).data,
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=["post"], url_path="reactivar",
+            permission_classes=[EsAdminSucursalOSuperAdmin])
+    def reactivar(self, request, pk=None):
+        conductor = self.get_object()
+        user = request.user
+
+        if es_admin_sucursal(user) and conductor.sucursal_id != user.sucursal_id:
+            raise PermissionDenied("No puedes reactivar conductores de otra sucursal.")
+
+        conductor.activo = True
+        conductor.save(update_fields=["activo"])
+
+        return Response(
+            self.get_serializer(conductor).data,
+            status=status.HTTP_200_OK
+        )
+
 class VehiculoViewSet(viewsets.ModelViewSet):
     serializer_class = VehiculoSerializer
 
@@ -560,6 +624,25 @@ class VehiculoViewSet(viewsets.ModelViewSet):
 
         raise PermissionDenied("No tienes permiso para modificar vehículos.")
 
+    @action(detail=False, methods=["get"], url_path="disponibles")
+    def disponibles(self, request):
+        # Vehículos que NO tienen una asignación activa (libres para asignar).
+        qs = self.get_queryset().exclude(asignaciones__activa=True)
+
+        # Al editar una asignación se debe poder conservar su vehículo actual.
+        asignacion_id = request.query_params.get("asignacion")
+        if asignacion_id:
+            actual = AsignacionVehiculo.objects.filter(
+                pk=asignacion_id, activa=True
+            ).values_list("vehiculo_id", flat=True).first()
+            if actual:
+                qs = self.get_queryset().filter(
+                    Q(pk=actual) | ~Q(asignaciones__activa=True)
+                )
+
+        serializer = self.get_serializer(qs.distinct(), many=True)
+        return Response(serializer.data)
+
 
 class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
     serializer_class = AsignacionVehiculoSerializer
@@ -595,6 +678,22 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
 
         return qs.none()
 
+    def _guardar_validado(self, serializer, sucursal):
+        # Construye la instancia con los datos entrantes y corre full_clean()
+        # (que dispara Asignacion.clean) ANTES de guardar. Traduce el error de
+        # Django a un 400 con el mensaje claro de la validación.
+        instance = serializer.instance or AsignacionVehiculo()
+        for attr, value in serializer.validated_data.items():
+            setattr(instance, attr, value)
+        instance.sucursal = sucursal
+
+        try:
+            instance.full_clean(validate_unique=False)
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.messages)
+
+        serializer.save(sucursal=sucursal)
+
     def perform_create(self, serializer):
         user = self.request.user
         conductor = serializer.validated_data.get("conductor")
@@ -611,7 +710,7 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
                     "No puedes asignar vehículos de una sucursal desde el panel superadmin."
                 )
 
-            serializer.save(sucursal=None)
+            self._guardar_validado(serializer, None)
             return
 
         if es_admin_sucursal(user):
@@ -624,7 +723,7 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
             if vehiculo.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes asignar vehículos de otra sucursal.")
 
-            serializer.save(sucursal=user.sucursal)
+            self._guardar_validado(serializer, user.sucursal)
             return
 
         raise PermissionDenied("No tienes permiso para crear asignaciones.")
@@ -651,7 +750,7 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
                     "No puedes asignar vehículos de una sucursal desde el panel superadmin."
                 )
 
-            serializer.save(sucursal=None)
+            self._guardar_validado(serializer, None)
             return
 
         if es_admin_sucursal(user):
@@ -667,7 +766,7 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
             if vehiculo.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes asignar vehículos de otra sucursal.")
 
-            serializer.save(sucursal=user.sucursal)
+            self._guardar_validado(serializer, user.sucursal)
             return
 
         raise PermissionDenied("No tienes permiso para modificar asignaciones.")
