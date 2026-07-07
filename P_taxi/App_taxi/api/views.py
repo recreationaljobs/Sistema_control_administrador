@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import authenticate
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q, Sum
 from django.utils import timezone
 
@@ -72,6 +73,8 @@ from .services import (
     actualizar_kilometraje_vehiculo,
     aplicar_mantenimiento_en_vehiculo,
     obtener_alertas_vehiculo,
+    construir_alerta_km_aceite,
+    construir_alerta_licencia,
     sumar_decimal,
     sumar_entero,
 )
@@ -240,6 +243,9 @@ class UsuarioViewSet(viewsets.ModelViewSet):
         if self.action in ["me"]:
             return [IsAuthenticated()]
 
+        if self.action in ["dar_baja", "reactivar"]:
+            return [EsSuperAdmin()]
+
         return [EsAdminSucursalOSuperAdmin()]
 
     def get_queryset(self):
@@ -251,12 +257,12 @@ class UsuarioViewSet(viewsets.ModelViewSet):
         ).all().order_by("-id")
 
         if es_superadmin(user):
-            return queryset.filter(
-                Q(sucursal__isnull=True) |
-                Q(rol__codigo="admin_sucursal")
-            )
+            return queryset
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                return queryset.none()
+
             return queryset.filter(
                 sucursal=user.sucursal
             ).exclude(
@@ -273,6 +279,37 @@ class UsuarioViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
     def me(self, request):
         return Response(self.get_serializer(request.user).data)
+
+    @action(detail=True, methods=["post"], url_path="dar-baja")
+    def dar_baja(self, request, pk=None):
+        usuario = self.get_object()
+
+        # Proteccion: no se puede dar de baja a un superadmin.
+        if es_superadmin(usuario):
+            raise PermissionDenied("No puedes dar de baja a un superadmin.")
+
+        usuario.is_active = False
+        usuario.save(update_fields=["is_active"])
+
+        # Revoca los tokens activos para forzar el cierre de sesion.
+        Token.objects.filter(user=usuario).delete()
+
+        return Response(
+            self.get_serializer(usuario).data,
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=["post"], url_path="reactivar")
+    def reactivar(self, request, pk=None):
+        usuario = self.get_object()
+
+        usuario.is_active = True
+        usuario.save(update_fields=["is_active"])
+
+        return Response(
+            self.get_serializer(usuario).data,
+            status=status.HTTP_200_OK
+        )
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -340,9 +377,11 @@ class ConductorViewSet(viewsets.ModelViewSet):
         ).all().order_by("-id")
 
         if es_superadmin(user):
-            return qs.filter(sucursal__isnull=True)
+            return qs
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                return qs.none()
             return qs.filter(sucursal=user.sucursal)
 
         if es_taxista(user):
@@ -353,15 +392,22 @@ class ConductorViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
 
+        # Si no se envia porcentaje_pago, se usa el % por defecto de la sucursal.
+        porcentaje = serializer.validated_data.get("porcentaje_pago")
+
         if es_superadmin(user):
-            serializer.save(sucursal=None)
+            if porcentaje is None:
+                porcentaje = obtener_configuracion_sucursal(None).porcentaje_pago_conductor
+            serializer.save(sucursal=None, porcentaje_pago=porcentaje)
             return
 
         if es_admin_sucursal(user):
             if not user.sucursal:
                 raise ValidationError("Tu usuario no tiene una sucursal asignada.")
 
-            serializer.save(sucursal=user.sucursal)
+            if porcentaje is None:
+                porcentaje = obtener_configuracion_sucursal(user.sucursal).porcentaje_pago_conductor
+            serializer.save(sucursal=user.sucursal, porcentaje_pago=porcentaje)
             return
 
         raise PermissionDenied("No tienes permiso para crear conductores.")
@@ -370,18 +416,36 @@ class ConductorViewSet(viewsets.ModelViewSet):
         user = self.request.user
         instance = self.get_object()
 
-        if es_superadmin(user):
-            if instance.sucursal_id is not None:
-                raise PermissionDenied("No puedes modificar conductores de una sucursal desde el panel superadmin.")
+        # El % solo se toca si llega en el request. Si llega null/vacio -> default
+        # de la sucursal; si llega con valor (incluido 0 explicito) se respeta;
+        # si no llega, se conserva el valor actual del conductor.
+        actualizar_porcentaje = "porcentaje_pago" in serializer.validated_data
+        porcentaje = serializer.validated_data.get("porcentaje_pago")
 
-            serializer.save(sucursal=None)
+        if es_superadmin(user):
+            sucursal = serializer.validated_data.get("sucursal", instance.sucursal)
+
+            if actualizar_porcentaje and porcentaje is None:
+                porcentaje = obtener_configuracion_sucursal(sucursal).porcentaje_pago_conductor
+
+            if actualizar_porcentaje:
+                serializer.save(porcentaje_pago=porcentaje)
+            else:
+                serializer.save()
+
             return
 
         if es_admin_sucursal(user):
             if instance.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes modificar conductores de otra sucursal.")
 
-            serializer.save(sucursal=user.sucursal)
+            if actualizar_porcentaje and porcentaje is None:
+                porcentaje = obtener_configuracion_sucursal(user.sucursal).porcentaje_pago_conductor
+
+            if actualizar_porcentaje:
+                serializer.save(sucursal=user.sucursal, porcentaje_pago=porcentaje)
+            else:
+                serializer.save(sucursal=user.sucursal)
             return
 
         raise PermissionDenied("No tienes permiso para modificar conductores.")
@@ -400,33 +464,87 @@ class ConductorViewSet(viewsets.ModelViewSet):
 
         search = request.query_params.get("search", "").strip()
 
-        if es_superadmin(user):
-            qs = qs.filter(sucursal__isnull=True)
-
-        elif es_admin_sucursal(user):
+        if es_admin_sucursal(user):
             if not user.sucursal:
                 raise ValidationError("Tu usuario no tiene una sucursal asignada.")
 
             qs = qs.filter(sucursal=user.sucursal)
 
-        else:
+        elif not es_superadmin(user):
             return Response([])
 
         if search:
-            qs = (
-                qs.filter(nombre__icontains=search)
-                | qs.filter(apellido__icontains=search)
-                | qs.filter(cedula__icontains=search)
+            qs = qs.filter(
+                Q(nombre__icontains=search) |
+                Q(apellido__icontains=search) |
+                Q(cedula__icontains=search)
             )
-
-            if es_superadmin(user):
-                qs = qs.filter(sucursal__isnull=True)
-
-            if es_admin_sucursal(user):
-                qs = qs.filter(sucursal=user.sucursal)
 
         serializer = self.get_serializer(qs.distinct(), many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], url_path="disponibles")
+    def disponibles(self, request):
+        # Conductores activos que NO tienen una asignación activa. Sirve para
+        # los dropdowns de asignación (solo conductores libres).
+        qs = self.get_queryset().filter(activo=True).exclude(
+            asignaciones__activa=True
+        )
+
+        # Al editar una asignación se debe poder conservar su conductor actual.
+        asignacion_id = request.query_params.get("asignacion")
+        if asignacion_id:
+            actual = AsignacionVehiculo.objects.filter(
+                pk=asignacion_id, activa=True
+            ).values_list("conductor_id", flat=True).first()
+            if actual:
+                qs = self.get_queryset().filter(activo=True).filter(
+                    Q(pk=actual) | ~Q(asignaciones__activa=True)
+                )
+
+        serializer = self.get_serializer(qs.distinct(), many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="despedir",
+            permission_classes=[EsAdminSucursalOSuperAdmin])
+    def despedir(self, request, pk=None):
+        conductor = self.get_object()
+        user = request.user
+
+        if es_admin_sucursal(user) and conductor.sucursal_id != user.sucursal_id:
+            raise PermissionDenied("No puedes despedir conductores de otra sucursal.")
+
+        conductor.activo = False
+        conductor.save(update_fields=["activo"])
+
+        # Libera el vehículo cerrando la asignación activa.
+        asignacion = conductor.asignaciones.filter(activa=True).first()
+        if asignacion:
+            asignacion.activa = False
+            asignacion.fecha_fin = timezone.localdate()
+            asignacion.save(update_fields=["activa", "fecha_fin"])
+
+        return Response(
+            self.get_serializer(conductor).data,
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=["post"], url_path="reactivar",
+            permission_classes=[EsAdminSucursalOSuperAdmin])
+    def reactivar(self, request, pk=None):
+        conductor = self.get_object()
+        user = request.user
+
+        if es_admin_sucursal(user) and conductor.sucursal_id != user.sucursal_id:
+            raise PermissionDenied("No puedes reactivar conductores de otra sucursal.")
+
+        conductor.activo = True
+        conductor.save(update_fields=["activo"])
+
+        return Response(
+            self.get_serializer(conductor).data,
+            status=status.HTTP_200_OK
+        )
 
 class VehiculoViewSet(viewsets.ModelViewSet):
     serializer_class = VehiculoSerializer
@@ -501,6 +619,25 @@ class VehiculoViewSet(viewsets.ModelViewSet):
 
         raise PermissionDenied("No tienes permiso para modificar vehículos.")
 
+    @action(detail=False, methods=["get"], url_path="disponibles")
+    def disponibles(self, request):
+        # Vehículos que NO tienen una asignación activa (libres para asignar).
+        qs = self.get_queryset().exclude(asignaciones__activa=True)
+
+        # Al editar una asignación se debe poder conservar su vehículo actual.
+        asignacion_id = request.query_params.get("asignacion")
+        if asignacion_id:
+            actual = AsignacionVehiculo.objects.filter(
+                pk=asignacion_id, activa=True
+            ).values_list("vehiculo_id", flat=True).first()
+            if actual:
+                qs = self.get_queryset().filter(
+                    Q(pk=actual) | ~Q(asignaciones__activa=True)
+                )
+
+        serializer = self.get_serializer(qs.distinct(), many=True)
+        return Response(serializer.data)
+
 
 class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
     serializer_class = AsignacionVehiculoSerializer
@@ -536,6 +673,22 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
 
         return qs.none()
 
+    def _guardar_validado(self, serializer, sucursal):
+        # Construye la instancia con los datos entrantes y corre full_clean()
+        # (que dispara Asignacion.clean) ANTES de guardar. Traduce el error de
+        # Django a un 400 con el mensaje claro de la validación.
+        instance = serializer.instance or AsignacionVehiculo()
+        for attr, value in serializer.validated_data.items():
+            setattr(instance, attr, value)
+        instance.sucursal = sucursal
+
+        try:
+            instance.full_clean(validate_unique=False)
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.messages)
+
+        serializer.save(sucursal=sucursal)
+
     def perform_create(self, serializer):
         user = self.request.user
         conductor = serializer.validated_data.get("conductor")
@@ -552,7 +705,7 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
                     "No puedes asignar vehículos de una sucursal desde el panel superadmin."
                 )
 
-            serializer.save(sucursal=None)
+            self._guardar_validado(serializer, None)
             return
 
         if es_admin_sucursal(user):
@@ -565,7 +718,7 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
             if vehiculo.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes asignar vehículos de otra sucursal.")
 
-            serializer.save(sucursal=user.sucursal)
+            self._guardar_validado(serializer, user.sucursal)
             return
 
         raise PermissionDenied("No tienes permiso para crear asignaciones.")
@@ -592,7 +745,7 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
                     "No puedes asignar vehículos de una sucursal desde el panel superadmin."
                 )
 
-            serializer.save(sucursal=None)
+            self._guardar_validado(serializer, None)
             return
 
         if es_admin_sucursal(user):
@@ -608,7 +761,7 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
             if vehiculo.sucursal_id != user.sucursal_id:
                 raise PermissionDenied("No puedes asignar vehículos de otra sucursal.")
 
-            serializer.save(sucursal=user.sucursal)
+            self._guardar_validado(serializer, user.sucursal)
             return
 
         raise PermissionDenied("No tienes permiso para modificar asignaciones.")
@@ -674,9 +827,20 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
 
         return qs
 
-    def _obtener_porcentaje(self, sucursal):
+    def _obtener_porcentaje_fallback(self, sucursal):
+        # Fallback: % por defecto de la config de la sucursal (o global).
         configuracion = obtener_configuracion_sucursal(sucursal)
         return configuracion.porcentaje_pago_conductor
+
+    def _resolver_porcentaje(self, conductor, sucursal):
+        # Flujo principal: el % lo define el conductor. Si el conductor no tiene
+        # un % propio (None o 0), se cae al % por defecto de la sucursal.
+        porcentaje = getattr(conductor, "porcentaje_pago", None)
+
+        if porcentaje is None or Decimal(porcentaje) == Decimal("0.00"):
+            return self._obtener_porcentaje_fallback(sucursal)
+
+        return porcentaje
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -756,7 +920,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
                 "detail": "Ya existe una jornada para este conductor y vehículo en esta fecha. Debes cerrar la jornada existente, no crear otra."
             })
 
-        porcentaje = self._obtener_porcentaje(sucursal)
+        porcentaje = self._resolver_porcentaje(conductor, sucursal)
 
         jornada = serializer.save(
             sucursal=sucursal,
@@ -838,7 +1002,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         if not asignacion_activa:
             raise ValidationError("El conductor no tiene una asignación activa con ese vehículo.")
 
-        porcentaje = self._obtener_porcentaje(sucursal)
+        porcentaje = self._resolver_porcentaje(conductor, sucursal)
 
         km_inicial = serializer.validated_data.get(
             "kilometraje_inicial",
@@ -919,7 +1083,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         else:
             raise PermissionDenied("No tienes permiso para cerrar esta jornada.")
 
-        porcentaje = self._obtener_porcentaje(jornada.sucursal)
+        porcentaje = self._resolver_porcentaje(jornada.conductor, jornada.sucursal)
 
         campos_calculados = calcular_campos_jornada(
             jornada.kilometraje_inicial,
@@ -971,14 +1135,14 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
 
         ingreso_bruto = Decimal(str(request.data.get("ingreso_bruto", "0.00") or "0.00"))
         monto_alquiler = Decimal(str(request.data.get("monto_alquiler", "0.00") or "0.00"))
-        porcentaje = Decimal(
-            str(
-                request.data.get(
-                    "porcentaje_pago_conductor",
-                    jornada.porcentaje_pago_conductor or "30.00"
-                )
-            )
-        )
+
+        # Prioridad del %: body explicito > conductor.porcentaje_pago > config de sucursal.
+        porcentaje_body = request.data.get("porcentaje_pago_conductor")
+
+        if porcentaje_body not in (None, ""):
+            porcentaje = Decimal(str(porcentaje_body))
+        else:
+            porcentaje = self._resolver_porcentaje(jornada.conductor, jornada.sucursal)
 
         if tipo_cobro == "porcentaje":
             if ingreso_bruto < 0:
@@ -1796,15 +1960,21 @@ class AlertasMantenimientoView(APIView):
 
     def get(self, request):
         user = request.user
+        hoy = timezone.localdate()
+        ahora = timezone.now().isoformat()
+
         vehiculos = Vehiculo.objects.select_related("sucursal", "estado").all()
+        conductores = Conductor.objects.select_related("sucursal").filter(activo=True)
 
         if es_superadmin(user):
             sucursal_id = request.query_params.get("sucursal")
             if sucursal_id:
                 vehiculos = vehiculos.filter(sucursal_id=sucursal_id)
+                conductores = conductores.filter(sucursal_id=sucursal_id)
 
         elif es_admin_sucursal(user):
             vehiculos = vehiculos.filter(sucursal=user.sucursal)
+            conductores = conductores.filter(sucursal=user.sucursal)
 
         elif es_taxista(user):
             vehiculos = vehiculos.filter(
@@ -1812,14 +1982,42 @@ class AlertasMantenimientoView(APIView):
                 asignaciones__conductor__usuario=user,
                 asignaciones__activa=True
             ).distinct()
+            conductores = conductores.filter(usuario=user)
 
         else:
             return Response({"detail": "No tienes permisos."}, status=403)
 
+        # Tipo de mantenimiento "aceite" (se crea si no existe en el catálogo).
+        tipo_aceite, _ = TipoMantenimiento.objects.get_or_create(
+            codigo="aceite",
+            defaults={"nombre": "Cambio de aceite", "intervalo_km": 5000},
+        )
+
+        config_cache = {}
+
+        def config_de(sucursal):
+            clave = sucursal.id if sucursal else None
+            if clave not in config_cache:
+                config_cache[clave] = obtener_configuracion_sucursal(sucursal)
+            return config_cache[clave]
+
         alertas = []
 
         for vehiculo in vehiculos:
-            alertas.extend(obtener_alertas_vehiculo(vehiculo))
+            alerta = construir_alerta_km_aceite(
+                vehiculo, config_de(vehiculo.sucursal), tipo_aceite, ahora
+            )
+            if alerta:
+                alertas.append(alerta)
+
+        for conductor in conductores:
+            alerta = construir_alerta_licencia(conductor, hoy, ahora)
+            if alerta:
+                alertas.append(alerta)
+
+        # Más urgentes primero.
+        orden = {"critical": 0, "warning": 1, "info": 2}
+        alertas.sort(key=lambda a: orden.get(a["severidad"], 3))
 
         return Response(alertas)
 

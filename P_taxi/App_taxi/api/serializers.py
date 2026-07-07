@@ -300,6 +300,10 @@ class ConductorSerializer(serializers.ModelSerializer):
             "direccion",
             "licencia",
             "vencimiento_licencia",
+            "numero_licencia",
+            "fecha_inicio_licencia",
+            "fecha_vencimiento_licencia",
+            "porcentaje_pago",
             "fecha_registro",
             "activo",
         ]
@@ -315,6 +319,10 @@ class ConductorSerializer(serializers.ModelSerializer):
                 "allow_null": True,
             },
             "usuario": {
+                "required": False,
+                "allow_null": True,
+            },
+            "porcentaje_pago": {
                 "required": False,
                 "allow_null": True,
             },
@@ -679,14 +687,24 @@ class AsignacionVehiculoSerializer(serializers.ModelSerializer):
                 qs_vehiculo = qs_vehiculo.exclude(pk=self.instance.pk)
                 qs_conductor = qs_conductor.exclude(pk=self.instance.pk)
 
-            if qs_vehiculo.exists():
+            conflicto_vehiculo = qs_vehiculo.select_related("conductor").first()
+            if conflicto_vehiculo:
+                c = conflicto_vehiculo.conductor
                 raise serializers.ValidationError({
-                    "vehiculo": "Ese vehículo ya tiene una asignación activa."
+                    "vehiculo": (
+                        f"El vehículo {vehiculo.placa} ya está asignado al "
+                        f"conductor {c.nombre} {c.apellido}."
+                    )
                 })
 
-            if qs_conductor.exists():
+            conflicto_conductor = qs_conductor.select_related("vehiculo").first()
+            if conflicto_conductor:
                 raise serializers.ValidationError({
-                    "conductor": "Ese conductor ya tiene una asignación activa."
+                    "conductor": (
+                        f"El conductor {conductor.nombre} {conductor.apellido} "
+                        f"ya tiene otro vehículo asignado "
+                        f"({conflicto_conductor.vehiculo.placa})."
+                    )
                 })
 
         return attrs
@@ -1186,6 +1204,7 @@ class ConfiguracionSistemaSerializer(serializers.ModelSerializer):
             "intervalo_cambio_aceite_km",
             "intervalo_mantenimiento_km",
             "alerta_previa_km",
+            "km_aviso_mantenimiento",
             "moneda",
         ]
         read_only_fields = ["id", "sucursal_nombre"]

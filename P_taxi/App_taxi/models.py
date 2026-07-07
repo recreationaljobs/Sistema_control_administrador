@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.db.models import Q
@@ -142,6 +143,7 @@ class TipoMantenimiento(models.Model):
     nombre = models.CharField(max_length=80)
     codigo = models.CharField(max_length=50, unique=True)
     activo = models.BooleanField(default=True)
+    intervalo_km = models.PositiveIntegerField(default=5000)
 
     class Meta:
         verbose_name = "Tipo de mantenimiento"
@@ -189,6 +191,10 @@ class Conductor(models.Model):
     direccion = models.TextField(blank=True, null=True)
     licencia = models.CharField(max_length=50)
     vencimiento_licencia = models.DateField(blank=True, null=True)
+
+    numero_licencia = models.CharField(max_length=50, blank=True, null=True)
+    fecha_inicio_licencia = models.DateField(blank=True, null=True)
+    fecha_vencimiento_licencia = models.DateField(blank=True, null=True)
 
     porcentaje_pago = models.DecimalField(
         max_digits=5,
@@ -314,6 +320,40 @@ class AsignacionVehiculo(models.Model):
                 name="unique_conductor_activo"
             ),
         ]
+
+    def clean(self):
+        super().clean()
+
+        # Solo las asignaciones activas compiten por vehículo/conductor.
+        if not self.activa:
+            return
+
+        conflicto_vehiculo = (
+            AsignacionVehiculo.objects
+            .filter(vehiculo=self.vehiculo, activa=True)
+            .exclude(pk=self.pk)
+            .select_related("conductor")
+            .first()
+        )
+        if conflicto_vehiculo:
+            c = conflicto_vehiculo.conductor
+            raise ValidationError(
+                f"El vehículo {self.vehiculo.placa} ya está asignado al conductor "
+                f"{c.nombre} {c.apellido}."
+            )
+
+        conflicto_conductor = (
+            AsignacionVehiculo.objects
+            .filter(conductor=self.conductor, activa=True)
+            .exclude(pk=self.pk)
+            .select_related("vehiculo")
+            .first()
+        )
+        if conflicto_conductor:
+            raise ValidationError(
+                f"El conductor {self.conductor.nombre} {self.conductor.apellido} "
+                f"ya tiene otro vehículo asignado ({conflicto_conductor.vehiculo.placa})."
+            )
 
     def __str__(self):
         return f"{self.conductor} - {self.vehiculo.placa}"
@@ -634,6 +674,10 @@ class ConfiguracionSistema(models.Model):
     intervalo_cambio_aceite_km = models.PositiveIntegerField(default=5000)
     intervalo_mantenimiento_km = models.PositiveIntegerField(default=10000)
     alerta_previa_km = models.PositiveIntegerField(default=300)
+
+    # Km antes del punto de cambio en que se dispara el aviso de aceite.
+    km_aviso_mantenimiento = models.PositiveIntegerField(default=30)
+
     moneda = models.CharField(max_length=10, default="C$")
 
     class Meta:
