@@ -510,6 +510,7 @@ class ConductorViewSet(viewsets.ModelViewSet):
     def despedir(self, request, pk=None):
         conductor = self.get_object()
         user = request.user
+        
 
         if es_admin_sucursal(user) and conductor.sucursal_id != user.sucursal_id:
             raise PermissionDenied("No puedes despedir conductores de otra sucursal.")
