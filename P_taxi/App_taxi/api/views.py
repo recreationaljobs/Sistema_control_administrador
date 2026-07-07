@@ -257,12 +257,12 @@ class UsuarioViewSet(viewsets.ModelViewSet):
         ).all().order_by("-id")
 
         if es_superadmin(user):
-            return queryset.filter(
-                Q(sucursal__isnull=True) |
-                Q(rol__codigo="admin_sucursal")
-            )
+            return queryset
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                return queryset.none()
+
             return queryset.filter(
                 sucursal=user.sucursal
             ).exclude(
@@ -377,9 +377,11 @@ class ConductorViewSet(viewsets.ModelViewSet):
         ).all().order_by("-id")
 
         if es_superadmin(user):
-            return qs.filter(sucursal__isnull=True)
+            return qs
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                return qs.none()
             return qs.filter(sucursal=user.sucursal)
 
         if es_taxista(user):
@@ -421,16 +423,16 @@ class ConductorViewSet(viewsets.ModelViewSet):
         porcentaje = serializer.validated_data.get("porcentaje_pago")
 
         if es_superadmin(user):
-            if instance.sucursal_id is not None:
-                raise PermissionDenied("No puedes modificar conductores de una sucursal desde el panel superadmin.")
+            sucursal = serializer.validated_data.get("sucursal", instance.sucursal)
 
             if actualizar_porcentaje and porcentaje is None:
-                porcentaje = obtener_configuracion_sucursal(None).porcentaje_pago_conductor
+                porcentaje = obtener_configuracion_sucursal(sucursal).porcentaje_pago_conductor
 
             if actualizar_porcentaje:
-                serializer.save(sucursal=None, porcentaje_pago=porcentaje)
+                serializer.save(porcentaje_pago=porcentaje)
             else:
-                serializer.save(sucursal=None)
+                serializer.save()
+
             return
 
         if es_admin_sucursal(user):
@@ -462,30 +464,21 @@ class ConductorViewSet(viewsets.ModelViewSet):
 
         search = request.query_params.get("search", "").strip()
 
-        if es_superadmin(user):
-            qs = qs.filter(sucursal__isnull=True)
-
-        elif es_admin_sucursal(user):
+        if es_admin_sucursal(user):
             if not user.sucursal:
                 raise ValidationError("Tu usuario no tiene una sucursal asignada.")
 
             qs = qs.filter(sucursal=user.sucursal)
 
-        else:
+        elif not es_superadmin(user):
             return Response([])
 
         if search:
-            qs = (
-                qs.filter(nombre__icontains=search)
-                | qs.filter(apellido__icontains=search)
-                | qs.filter(cedula__icontains=search)
+            qs = qs.filter(
+                Q(nombre__icontains=search) |
+                Q(apellido__icontains=search) |
+                Q(cedula__icontains=search)
             )
-
-            if es_superadmin(user):
-                qs = qs.filter(sucursal__isnull=True)
-
-            if es_admin_sucursal(user):
-                qs = qs.filter(sucursal=user.sucursal)
 
         serializer = self.get_serializer(qs.distinct(), many=True)
         return Response(serializer.data)
