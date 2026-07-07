@@ -30,7 +30,13 @@ SECRET_KEY = 'django-insecure-8ioo*x!7j$vjdzlq#(j4yc#$i1*!mpa)f4sm6jbpf6x1p2(z7x
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = []
+# Con DEBUG=False y ALLOWED_HOSTS vacío Django rechaza todas las peticiones.
+# Se define un default para desarrollo local; en producción se sobreescribe
+# con la variable de entorno ALLOWED_HOSTS (hosts separados por coma).
+ALLOWED_HOSTS = os.getenv(
+    "ALLOWED_HOSTS",
+    "localhost,127.0.0.1,[::1]"
+).split(",")
 
 
 # Application definition

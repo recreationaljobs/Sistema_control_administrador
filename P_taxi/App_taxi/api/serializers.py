@@ -338,11 +338,14 @@ class ConductorSerializer(serializers.ModelSerializer):
         cedula = attrs.get("cedula", getattr(self.instance, "cedula", None))
 
         if user.rol and user.rol.codigo == "superadmin":
-            attrs["sucursal"] = None
+            # superadmin gestiona todas las sucursales: al crear, el conductor
+            # es global; al editar, se conserva su sucursal actual.
+            sucursal = self.instance.sucursal if self.instance else None
+            attrs["sucursal"] = sucursal
 
             if cedula:
                 qs = Conductor.objects.filter(
-                    sucursal__isnull=True,
+                    sucursal=sucursal,
                     cedula=cedula
                 )
 
@@ -351,7 +354,7 @@ class ConductorSerializer(serializers.ModelSerializer):
 
                 if qs.exists():
                     raise serializers.ValidationError({
-                        "cedula": "Ya existe un conductor del superadmin con esta cédula."
+                        "cedula": "Ya existe un conductor con esta cédula en esa sucursal."
                     })
 
             return attrs
@@ -469,11 +472,14 @@ class VehiculoSerializer(serializers.ModelSerializer):
         placa = attrs.get("placa", getattr(self.instance, "placa", None))
 
         if user.rol and user.rol.codigo == "superadmin":
-            attrs["sucursal"] = None
+            # superadmin gestiona todas las sucursales: al crear, el vehículo es
+            # global; al editar, se conserva su sucursal actual.
+            sucursal = self.instance.sucursal if self.instance else None
+            attrs["sucursal"] = sucursal
 
             if numero:
                 qs = Vehiculo.objects.filter(
-                    sucursal__isnull=True,
+                    sucursal=sucursal,
                     numero=numero
                 )
 
@@ -482,7 +488,7 @@ class VehiculoSerializer(serializers.ModelSerializer):
 
                 if qs.exists():
                     raise serializers.ValidationError({
-                        "numero": "Ya existe un vehículo del superadmin con este número."
+                        "numero": "Ya existe un vehículo con este número en esa sucursal."
                     })
 
             if placa:
@@ -634,17 +640,15 @@ class AsignacionVehiculoSerializer(serializers.ModelSerializer):
         codigo_rol = user.rol.codigo
 
         if codigo_rol == "superadmin":
-            if conductor.sucursal_id is not None:
+            # El superadmin puede asignar en cualquier sucursal, pero el
+            # conductor y el vehículo deben ser de la misma (ambos globales o
+            # ambos de la misma sucursal). La asignación hereda esa sucursal.
+            if conductor.sucursal_id != vehiculo.sucursal_id:
                 raise serializers.ValidationError({
-                    "conductor": "Desde el panel superadmin solo puedes asignar conductores del superadmin."
+                    "vehiculo": "El conductor y el vehículo deben pertenecer a la misma sucursal."
                 })
 
-            if vehiculo.sucursal_id is not None:
-                raise serializers.ValidationError({
-                    "vehiculo": "Desde el panel superadmin solo puedes asignar vehículos del superadmin."
-                })
-
-            attrs["sucursal"] = None
+            attrs["sucursal"] = conductor.sucursal
 
         elif codigo_rol == "admin_sucursal":
             if not user.sucursal:
@@ -834,6 +838,10 @@ class AdelantoSerializer(serializers.ModelSerializer):
     estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
     estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
 
+    # El frontend envía "tipo" (ADELANTO/ABONO); el backend lo mapea a un
+    # EstadoAdelanto. No es un campo del modelo, por eso es write_only.
+    tipo = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
     class Meta:
         model = Adelanto
         fields = [
@@ -846,17 +854,25 @@ class AdelantoSerializer(serializers.ModelSerializer):
             "estado",
             "estado_nombre",
             "estado_codigo",
+            "tipo",
             "monto",
             "fecha",
             "observacion",
         ]
+        # sucursal la deriva el servidor (del conductor o de la jornada); el
+        # cliente no la manda. jornada y estado son opcionales.
         read_only_fields = [
             "id",
+            "sucursal",
             "sucursal_nombre",
             "conductor_nombre",
             "estado_nombre",
             "estado_codigo",
         ]
+        extra_kwargs = {
+            "jornada": {"required": False, "allow_null": True},
+            "estado": {"required": False, "allow_null": True},
+        }
 
     def get_conductor_nombre(self, obj):
         return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
@@ -864,14 +880,18 @@ class AdelantoSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         jornada = attrs.get("jornada", getattr(self.instance, "jornada", None))
         conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
-        sucursal = attrs.get("sucursal", getattr(self.instance, "sucursal", None))
 
-        if jornada:
-            if conductor and conductor.id != jornada.conductor_id:
-                raise serializers.ValidationError("El conductor no coincide con la jornada.")
+        # Un adelanto/abono siempre pertenece a un conductor. Si viene ligado a
+        # una jornada, el conductor se toma de ella; si no, es obligatorio.
+        if not jornada and not conductor:
+            raise serializers.ValidationError({
+                "conductor": "Debes indicar el conductor del movimiento."
+            })
 
-            if sucursal and sucursal.id != jornada.sucursal_id:
-                raise serializers.ValidationError("La sucursal no coincide con la jornada.")
+        if jornada and conductor and conductor.id != jornada.conductor_id:
+            raise serializers.ValidationError(
+                "El conductor no coincide con la jornada."
+            )
 
         return attrs
 

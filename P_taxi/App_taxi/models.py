@@ -192,6 +192,7 @@ class Conductor(models.Model):
     numero_licencia = models.CharField(max_length=50, blank=True, null=True)
     fecha_inicio_licencia = models.DateField(blank=True, null=True)
     fecha_vencimiento_licencia = models.DateField(blank=True, null=True)
+
     porcentaje_pago = models.DecimalField(
         max_digits=5,
         decimal_places=2,
@@ -553,8 +554,10 @@ class Gasto(models.Model):
 class Adelanto(models.Model):
     sucursal = models.ForeignKey(
         Sucursal,
-        on_delete=models.CASCADE,
-        related_name="adelantos"
+        on_delete=models.SET_NULL,
+        related_name="adelantos",
+        blank=True,
+        null=True
     )
 
     jornada = models.ForeignKey(

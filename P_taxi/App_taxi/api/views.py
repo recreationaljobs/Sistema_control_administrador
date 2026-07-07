@@ -568,10 +568,14 @@ class VehiculoViewSet(viewsets.ModelViewSet):
             "estado"
         ).all().order_by("placa")
 
+        # El superadmin gestiona todas las sucursales: ve todos los vehículos
+        # (globales y de sucursal), igual que los conductores.
         if es_superadmin(user):
-            return qs.filter(sucursal__isnull=True)
+            return qs
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                return qs.none()
             return qs.filter(sucursal=user.sucursal)
 
         if es_taxista(user):
@@ -603,12 +607,9 @@ class VehiculoViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
 
         if es_superadmin(user):
-            if instance.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes modificar vehículos de una sucursal desde el panel superadmin."
-                )
-
-            serializer.save(sucursal=None)
+            # El superadmin puede editar cualquier vehículo; se conserva la
+            # sucursal actual del vehículo (no se mueve a global).
+            serializer.save(sucursal=instance.sucursal)
             return
 
         if es_admin_sucursal(user):
@@ -663,10 +664,13 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
             "vehiculo"
         ).all().order_by("-fecha_inicio")
 
+        # El superadmin ve todas las asignaciones (de todas las sucursales).
         if es_superadmin(user):
-            return qs.filter(sucursal__isnull=True)
+            return qs
 
         if es_admin_sucursal(user):
+            if not user.sucursal:
+                return qs.none()
             return qs.filter(sucursal=user.sucursal)
 
         if es_taxista(user):
@@ -696,17 +700,16 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
         vehiculo = serializer.validated_data.get("vehiculo")
 
         if es_superadmin(user):
-            if conductor.sucursal_id is not None:
+            # El superadmin puede asignar en cualquier sucursal, pero el
+            # conductor y el vehículo deben pertenecer a la misma (ambos
+            # globales o ambos de la misma sucursal). La asignación hereda esa
+            # sucursal.
+            if conductor.sucursal_id != vehiculo.sucursal_id:
                 raise PermissionDenied(
-                    "No puedes asignar conductores de una sucursal desde el panel superadmin."
+                    "El conductor y el vehículo deben pertenecer a la misma sucursal."
                 )
 
-            if vehiculo.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes asignar vehículos de una sucursal desde el panel superadmin."
-                )
-
-            self._guardar_validado(serializer, None)
+            self._guardar_validado(serializer, conductor.sucursal)
             return
 
         if es_admin_sucursal(user):
@@ -731,22 +734,14 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
         vehiculo = serializer.validated_data.get("vehiculo", instance.vehiculo)
 
         if es_superadmin(user):
-            if instance.sucursal_id is not None:
+            # El superadmin puede modificar cualquier asignación; conductor y
+            # vehículo deben seguir siendo de la misma sucursal.
+            if conductor.sucursal_id != vehiculo.sucursal_id:
                 raise PermissionDenied(
-                    "No puedes modificar asignaciones de una sucursal desde el panel superadmin."
+                    "El conductor y el vehículo deben pertenecer a la misma sucursal."
                 )
 
-            if conductor.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes asignar conductores de una sucursal desde el panel superadmin."
-                )
-
-            if vehiculo.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes asignar vehículos de una sucursal desde el panel superadmin."
-                )
-
-            self._guardar_validado(serializer, None)
+            self._guardar_validado(serializer, conductor.sucursal)
             return
 
         if es_admin_sucursal(user):
@@ -1381,38 +1376,102 @@ class AdelantoViewSet(viewsets.ModelViewSet):
 
         return qs.none()
 
+    def _resolver_estado(self, tipo, estado_actual=None):
+        # El frontend manda "tipo" (ADELANTO/ABONO). Lo traducimos a un
+        # EstadoAdelanto por código. Si no viene tipo, se conserva el estado
+        # actual (caso edición que no cambia el tipo). get_or_create garantiza
+        # que el catálogo tenga los estados válidos aunque falten en la BD
+        # (robustez para la MySQL de Wilder).
+        if not tipo:
+            return estado_actual
+
+        codigo = "abono" if str(tipo).strip().upper() == "ABONO" else "adelanto"
+        nombre = "Abono" if codigo == "abono" else "Adelanto"
+
+        estado, _ = EstadoAdelanto.objects.get_or_create(
+            codigo=codigo,
+            defaults={"nombre": nombre, "activo": True},
+        )
+        return estado
+
+    def _resolver_sucursal_conductor(self, jornada, conductor):
+        # Si el movimiento va ligado a una jornada, manda la jornada; si no,
+        # el ámbito (sucursal) se hereda del conductor (None para el superadmin).
+        if jornada:
+            return jornada.sucursal, jornada.conductor
+        return conductor.sucursal, conductor
+
     def perform_create(self, serializer):
         user = self.request.user
+        tipo = serializer.validated_data.pop("tipo", None)
         jornada = serializer.validated_data.get("jornada")
+        conductor = serializer.validated_data.get("conductor")
 
-        if not jornada:
-            raise ValidationError("El adelanto debe estar asociado a una jornada.")
+        if not jornada and not conductor:
+            raise ValidationError("Debes indicar el conductor del movimiento.")
 
-        if es_admin_sucursal(user) and jornada.sucursal_id != user.sucursal_id:
-            raise PermissionDenied("No puedes registrar adelantos en otra sucursal.")
+        sucursal, conductor = self._resolver_sucursal_conductor(jornada, conductor)
 
-        adelanto = serializer.save(
-            sucursal=jornada.sucursal,
-            conductor=jornada.conductor
+        if es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+            if sucursal is None or sucursal.id != user.sucursal_id:
+                raise PermissionDenied("No puedes registrar adelantos en otra sucursal.")
+        # El superadmin puede registrar movimientos de cualquier conductor; la
+        # sucursal se hereda del conductor (o de la jornada).
+
+        estado = self._resolver_estado(
+            tipo, serializer.validated_data.get("estado")
         )
 
-        recalcular_totales_jornada(adelanto.jornada)
+        adelanto = serializer.save(
+            sucursal=sucursal,
+            conductor=conductor,
+            estado=estado,
+        )
+
+        if adelanto.jornada:
+            recalcular_totales_jornada(adelanto.jornada)
 
     def perform_update(self, serializer):
         user = self.request.user
         instance = self.get_object()
+        tipo = serializer.validated_data.pop("tipo", None)
 
-        if es_admin_sucursal(user) and instance.sucursal_id != user.sucursal_id:
-            raise PermissionDenied("No puedes modificar adelantos de otra sucursal.")
+        jornada = serializer.validated_data.get("jornada", instance.jornada)
+        conductor = serializer.validated_data.get("conductor", instance.conductor)
 
-        adelanto = serializer.save()
+        sucursal, conductor = self._resolver_sucursal_conductor(jornada, conductor)
 
-        recalcular_totales_jornada(adelanto.jornada)
+        if es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+            if instance.sucursal_id != user.sucursal_id:
+                raise PermissionDenied("No puedes modificar adelantos de otra sucursal.")
+            if sucursal is None or sucursal.id != user.sucursal_id:
+                raise PermissionDenied("No puedes mover adelantos a otra sucursal.")
+        # El superadmin puede modificar movimientos de cualquier conductor.
+
+        estado = self._resolver_estado(tipo, instance.estado)
+
+        adelanto = serializer.save(
+            sucursal=sucursal,
+            conductor=conductor,
+            estado=estado,
+        )
+
+        # Recalcula la(s) jornada(s) afectada(s), solo si existen.
+        jornada_anterior = instance.jornada
+        if jornada_anterior:
+            recalcular_totales_jornada(jornada_anterior)
+        if adelanto.jornada and adelanto.jornada_id != getattr(jornada_anterior, "id", None):
+            recalcular_totales_jornada(adelanto.jornada)
 
     def perform_destroy(self, instance):
         jornada = instance.jornada
         instance.delete()
-        recalcular_totales_jornada(jornada)
+        if jornada:
+            recalcular_totales_jornada(jornada)
 
 
 class MantenimientoViewSet(viewsets.ModelViewSet):
