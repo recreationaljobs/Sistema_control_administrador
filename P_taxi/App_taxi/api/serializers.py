@@ -837,6 +837,10 @@ class AdelantoSerializer(serializers.ModelSerializer):
     estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
     estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
 
+    # El frontend envía "tipo" (ADELANTO/ABONO); el backend lo mapea a un
+    # EstadoAdelanto. No es un campo del modelo, por eso es write_only.
+    tipo = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
     class Meta:
         model = Adelanto
         fields = [
@@ -849,17 +853,25 @@ class AdelantoSerializer(serializers.ModelSerializer):
             "estado",
             "estado_nombre",
             "estado_codigo",
+            "tipo",
             "monto",
             "fecha",
             "observacion",
         ]
+        # sucursal la deriva el servidor (del conductor o de la jornada); el
+        # cliente no la manda. jornada y estado son opcionales.
         read_only_fields = [
             "id",
+            "sucursal",
             "sucursal_nombre",
             "conductor_nombre",
             "estado_nombre",
             "estado_codigo",
         ]
+        extra_kwargs = {
+            "jornada": {"required": False, "allow_null": True},
+            "estado": {"required": False, "allow_null": True},
+        }
 
     def get_conductor_nombre(self, obj):
         return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
@@ -867,14 +879,18 @@ class AdelantoSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         jornada = attrs.get("jornada", getattr(self.instance, "jornada", None))
         conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
-        sucursal = attrs.get("sucursal", getattr(self.instance, "sucursal", None))
 
-        if jornada:
-            if conductor and conductor.id != jornada.conductor_id:
-                raise serializers.ValidationError("El conductor no coincide con la jornada.")
+        # Un adelanto/abono siempre pertenece a un conductor. Si viene ligado a
+        # una jornada, el conductor se toma de ella; si no, es obligatorio.
+        if not jornada and not conductor:
+            raise serializers.ValidationError({
+                "conductor": "Debes indicar el conductor del movimiento."
+            })
 
-            if sucursal and sucursal.id != jornada.sucursal_id:
-                raise serializers.ValidationError("La sucursal no coincide con la jornada.")
+        if jornada and conductor and conductor.id != jornada.conductor_id:
+            raise serializers.ValidationError(
+                "El conductor no coincide con la jornada."
+            )
 
         return attrs
 

@@ -553,7 +553,9 @@ class Adelanto(models.Model):
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,
-        related_name="adelantos"
+        related_name="adelantos",
+        blank=True,
+        null=True
     )
 
     jornada = models.ForeignKey(
