@@ -272,46 +272,43 @@ class UsuarioSerializer(serializers.ModelSerializer):
         return instance
 
 class ConductorSerializer(serializers.ModelSerializer):
-    sucursal_nombre = serializers.CharField(
-        source="sucursal.nombre",
+    licencia = serializers.CharField(
+        source="numero_licencia",
         read_only=True
     )
-
-    usuario_username = serializers.CharField(
-        source="usuario.username",
+    vencimiento_licencia = serializers.DateField(
+        source="fecha_vencimiento_licencia",
         read_only=True
     )
-
-    nombre_completo = serializers.SerializerMethodField()
 
     class Meta:
         model = Conductor
         fields = [
             "id",
             "sucursal",
-            "sucursal_nombre",
             "usuario",
-            "usuario_username",
             "nombre",
             "apellido",
-            "nombre_completo",
             "telefono",
             "cedula",
             "direccion",
-            "licencia",
-            "vencimiento_licencia",
+
             "numero_licencia",
             "fecha_inicio_licencia",
             "fecha_vencimiento_licencia",
+
+            "licencia",
+            "vencimiento_licencia",
+
             "porcentaje_pago",
             "fecha_registro",
             "activo",
         ]
         read_only_fields = [
+            "id",
             "fecha_registro",
-            "sucursal_nombre",
-            "usuario_username",
-            "nombre_completo",
+            "licencia",
+            "vencimiento_licencia",
         ]
         extra_kwargs = {
             "sucursal": {

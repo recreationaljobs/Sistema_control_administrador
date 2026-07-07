@@ -189,6 +189,7 @@ class Conductor(models.Model):
     telefono = models.CharField(max_length=20, blank=True, null=True)
     cedula = models.CharField(max_length=30)
     direccion = models.TextField(blank=True, null=True)
+    numero_licencia = models.CharField(max_length=50, blank=True, null=True)
     fecha_inicio_licencia = models.DateField(blank=True, null=True)
     fecha_vencimiento_licencia = models.DateField(blank=True, null=True)
     porcentaje_pago = models.DecimalField(
