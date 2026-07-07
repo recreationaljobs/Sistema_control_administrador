@@ -341,11 +341,14 @@ class ConductorSerializer(serializers.ModelSerializer):
         cedula = attrs.get("cedula", getattr(self.instance, "cedula", None))
 
         if user.rol and user.rol.codigo == "superadmin":
-            attrs["sucursal"] = None
+            # superadmin gestiona todas las sucursales: al crear, el conductor
+            # es global; al editar, se conserva su sucursal actual.
+            sucursal = self.instance.sucursal if self.instance else None
+            attrs["sucursal"] = sucursal
 
             if cedula:
                 qs = Conductor.objects.filter(
-                    sucursal__isnull=True,
+                    sucursal=sucursal,
                     cedula=cedula
                 )
 
@@ -354,7 +357,7 @@ class ConductorSerializer(serializers.ModelSerializer):
 
                 if qs.exists():
                     raise serializers.ValidationError({
-                        "cedula": "Ya existe un conductor del superadmin con esta cédula."
+                        "cedula": "Ya existe un conductor con esta cédula en esa sucursal."
                     })
 
             return attrs
@@ -472,11 +475,14 @@ class VehiculoSerializer(serializers.ModelSerializer):
         placa = attrs.get("placa", getattr(self.instance, "placa", None))
 
         if user.rol and user.rol.codigo == "superadmin":
-            attrs["sucursal"] = None
+            # superadmin gestiona todas las sucursales: al crear, el vehículo es
+            # global; al editar, se conserva su sucursal actual.
+            sucursal = self.instance.sucursal if self.instance else None
+            attrs["sucursal"] = sucursal
 
             if numero:
                 qs = Vehiculo.objects.filter(
-                    sucursal__isnull=True,
+                    sucursal=sucursal,
                     numero=numero
                 )
 
@@ -485,7 +491,7 @@ class VehiculoSerializer(serializers.ModelSerializer):
 
                 if qs.exists():
                     raise serializers.ValidationError({
-                        "numero": "Ya existe un vehículo del superadmin con este número."
+                        "numero": "Ya existe un vehículo con este número en esa sucursal."
                     })
 
             if placa:
@@ -637,17 +643,15 @@ class AsignacionVehiculoSerializer(serializers.ModelSerializer):
         codigo_rol = user.rol.codigo
 
         if codigo_rol == "superadmin":
-            if conductor.sucursal_id is not None:
+            # El superadmin puede asignar en cualquier sucursal, pero el
+            # conductor y el vehículo deben ser de la misma (ambos globales o
+            # ambos de la misma sucursal). La asignación hereda esa sucursal.
+            if conductor.sucursal_id != vehiculo.sucursal_id:
                 raise serializers.ValidationError({
-                    "conductor": "Desde el panel superadmin solo puedes asignar conductores del superadmin."
+                    "vehiculo": "El conductor y el vehículo deben pertenecer a la misma sucursal."
                 })
 
-            if vehiculo.sucursal_id is not None:
-                raise serializers.ValidationError({
-                    "vehiculo": "Desde el panel superadmin solo puedes asignar vehículos del superadmin."
-                })
-
-            attrs["sucursal"] = None
+            attrs["sucursal"] = conductor.sucursal
 
         elif codigo_rol == "admin_sucursal":
             if not user.sucursal:
