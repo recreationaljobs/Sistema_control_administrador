@@ -53,20 +53,39 @@ router.register(r"mantenimientos", MantenimientoViewSet, basename="mantenimiento
 
 
 urlpatterns = [
+    path(
+        "conductores/disponibles/",
+        ConductorViewSet.as_view({"get": "disponibles"}),
+        name="conductores-disponibles-directo",
+    ),
+    path(
+        "conductores/disponibles-usuario/",
+        ConductorViewSet.as_view({"get": "disponibles_usuario"}),
+        name="conductores-disponibles-usuario-directo",
+    ),
+    path(
+        "conductores/<int:pk>/despedir/",
+        ConductorViewSet.as_view({"post": "despedir"}),
+        name="conductores-despedir-directo",
+    ),
+    path(
+        "conductores/<int:pk>/reactivar/",
+        ConductorViewSet.as_view({"post": "reactivar"}),
+        name="conductores-reactivar-directo",
+    ),
+    path(
+        "vehiculos/disponibles/",
+        VehiculoViewSet.as_view({"get": "disponibles"}),
+        name="vehiculos-disponibles-directo",
+    ),
+
     path("", include(router.urls)),
+
     path("login/", LoginView.as_view(), name="login"),
     path("me/", MiPerfilView.as_view(), name="mi-perfil"),
-   path(
-    "configuracion-sistema/",
-    ConfiguracionSistemaView.as_view(),
-    name="configuracion-sistema"
-),
+    path("configuracion-sistema/", ConfiguracionSistemaView.as_view(), name="configuracion-sistema"),
     path("dashboard/resumen/", DashboardResumenView.as_view(), name="dashboard-resumen"),
-    path(
-    "dashboard/financiero/",
-    DashboardFinancieroView.as_view(),
-    name="dashboard-financiero",
-),
+    path("dashboard/financiero/", DashboardFinancieroView.as_view(), name="dashboard-financiero"),
     path("reportes/financiero/", ReporteFinancieroView.as_view(), name="reporte-financiero"),
     path("reportes/kilometraje/", ReporteKilometrajeView.as_view(), name="reporte-kilometraje"),
     path("mantenimiento/alertas/", AlertasMantenimientoView.as_view(), name="alertas-mantenimiento"),
