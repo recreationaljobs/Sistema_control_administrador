@@ -51,6 +51,7 @@ router.register(r"gastos", GastoViewSet, basename="gastos")
 router.register(r"adelantos", AdelantoViewSet, basename="adelantos")
 router.register(r"mantenimientos", MantenimientoViewSet, basename="mantenimientos")
 
+
 urlpatterns = [
     path("", include(router.urls)),
     path("login/", LoginView.as_view(), name="login"),
