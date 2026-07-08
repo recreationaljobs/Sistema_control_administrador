@@ -375,6 +375,8 @@ class ConductorSerializer(serializers.ModelSerializer):
                     "fecha_vencimiento_licencia",
                     getattr(self.instance, "fecha_vencimiento_licencia", None)
                 )
+        
+        
 
         if not licencia and numero_licencia:
                     attrs["licencia"] = numero_licencia
@@ -389,6 +391,21 @@ class ConductorSerializer(serializers.ModelSerializer):
                     attrs["fecha_vencimiento_licencia"] = vencimiento_licencia
 
         cedula = attrs.get("cedula", getattr(self.instance, "cedula", None))
+
+        porcentaje_pago = attrs.get(
+            "porcentaje_pago",
+            getattr(self.instance, "porcentaje_pago", None)
+        )
+
+        if porcentaje_pago not in (None, ""):
+            porcentaje_pago = Decimal(str(porcentaje_pago))
+
+            if porcentaje_pago < Decimal("1.00") or porcentaje_pago > Decimal("100.00"):
+                raise serializers.ValidationError({
+                    "porcentaje_pago": "El porcentaje debe estar entre 1 y 100."
+                })
+
+            attrs["porcentaje_pago"] = porcentaje_pago.quantize(Decimal("0.01"))
 
         if user.rol and user.rol.codigo == "superadmin":
             # superadmin gestiona todas las sucursales: al crear, el conductor

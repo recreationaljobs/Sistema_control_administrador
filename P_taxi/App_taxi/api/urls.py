@@ -27,6 +27,9 @@ from .views import (
     ReporteFinancieroView,
     ReporteKilometrajeView,
     AlertasMantenimientoView,
+    LiquidacionView,
+    LiquidacionPreviewView,
+    LiquidacionReciboView,
 )
 
 router = DefaultRouter()
@@ -88,5 +91,8 @@ urlpatterns = [
     path("dashboard/financiero/", DashboardFinancieroView.as_view(), name="dashboard-financiero"),
     path("reportes/financiero/", ReporteFinancieroView.as_view(), name="reporte-financiero"),
     path("reportes/kilometraje/", ReporteKilometrajeView.as_view(), name="reporte-kilometraje"),
+    path("liquidaciones/", LiquidacionView.as_view(), name="liquidaciones"),
+    path("liquidaciones/preview/", LiquidacionPreviewView.as_view(), name="liquidaciones-preview"),
+    path("liquidaciones/<int:pk>/recibo/", LiquidacionReciboView.as_view(), name="liquidaciones-recibo"),
     path("mantenimiento/alertas/", AlertasMantenimientoView.as_view(), name="alertas-mantenimiento"),
 ]

@@ -34,6 +34,8 @@ from ..models import (
     Adelanto,
     Mantenimiento,
     ConfiguracionSistema,
+    Liquidacion,
+    DetalleLiquidacion,
 )
 
 from .serializers import (
@@ -55,6 +57,7 @@ from .serializers import (
     AdelantoSerializer,
     MantenimientoSerializer,
     ConfiguracionSistemaSerializer,
+    
 )
 
 from .permissions import (
@@ -880,14 +883,19 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         return configuracion.porcentaje_pago_conductor
 
     def _resolver_porcentaje(self, conductor, sucursal):
-        # Flujo principal: el % lo define el conductor. Si el conductor no tiene
-        # un % propio (None o 0), se cae al % por defecto de la sucursal.
         porcentaje = getattr(conductor, "porcentaje_pago", None)
 
-        if porcentaje is None or Decimal(porcentaje) == Decimal("0.00"):
-            return self._obtener_porcentaje_fallback(sucursal)
+        if porcentaje is None or porcentaje == "":
+            porcentaje = self._obtener_porcentaje_fallback(sucursal)
 
-        return porcentaje
+        porcentaje = Decimal(str(porcentaje or "0.00"))
+
+        if porcentaje < Decimal("1.00") or porcentaje > Decimal("100.00"):
+            raise ValidationError({
+                "porcentaje_pago": "El porcentaje del conductor debe estar entre 1 y 100."
+            })
+
+        return porcentaje.quantize(Decimal("0.01"))
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -1070,7 +1078,9 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             km_inicial,
             km_final,
             ingreso_bruto,
-            porcentaje
+            porcentaje,
+            serializer.validated_data.get("tipo_cobro", instance.tipo_cobro),
+            serializer.validated_data.get("monto_alquiler", instance.monto_alquiler),
         )
 
         jornada = serializer.save(
@@ -1136,7 +1146,9 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             jornada.kilometraje_inicial,
             kilometraje_final,
             ingreso_bruto,
-            porcentaje
+            porcentaje,
+            jornada.tipo_cobro,
+            jornada.monto_alquiler,
         )
 
         jornada.kilometraje_final = kilometraje_final
@@ -1184,12 +1196,9 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         monto_alquiler = Decimal(str(request.data.get("monto_alquiler", "0.00") or "0.00"))
 
         # Prioridad del %: body explicito > conductor.porcentaje_pago > config de sucursal.
-        porcentaje_body = request.data.get("porcentaje_pago_conductor")
-
-        if porcentaje_body not in (None, ""):
-            porcentaje = Decimal(str(porcentaje_body))
-        else:
-            porcentaje = self._resolver_porcentaje(jornada.conductor, jornada.sucursal)
+               # El porcentaje siempre sale del conductor.
+        # No se acepta porcentaje desde el frontend para evitar cálculos incorrectos.
+        porcentaje = self._resolver_porcentaje(jornada.conductor, jornada.sucursal)
 
         if tipo_cobro == "porcentaje":
             if ingreso_bruto < 0:
@@ -2289,3 +2298,467 @@ class DashboardFinancieroView(APIView):
             )
 
         return Response(data)
+
+def _decimal(valor):
+    return Decimal(valor or "0.00")
+
+
+def _tipo_movimiento_adelanto(adelanto):
+    codigo = (
+        adelanto.estado.codigo
+        if adelanto.estado
+        else ""
+    )
+
+    codigo = str(codigo).strip().lower()
+
+    if codigo in ["abono", "abonado"]:
+        return "ABONO"
+
+    return "ADELANTO"
+
+
+def _serializar_jornada_liquidacion(jornada):
+    vehiculo = jornada.vehiculo
+
+    return {
+        "id": jornada.id,
+        "fecha": jornada.fecha,
+        "vehiculo": str(vehiculo) if vehiculo else "",
+        "vehiculo_id": jornada.vehiculo_id,
+        "kilometraje_inicial": jornada.kilometraje_inicial,
+        "kilometraje_final": jornada.kilometraje_final,
+        "kilometros_recorridos": jornada.kilometros_recorridos,
+        "ingreso_bruto": jornada.ingreso_bruto,
+        "pago_conductor": jornada.pago_conductor,
+        "total_adelantos": jornada.total_adelantos,
+        "pago_pendiente_conductor": jornada.pago_pendiente_conductor,
+        "ganancia_dueno": jornada.ganancia_dueno,
+    }
+
+
+def _serializar_liquidacion(liquidacion):
+    detalles = liquidacion.detalles.all().order_by("fecha", "id")
+
+    return {
+        "id": liquidacion.id,
+        "conductor": {
+            "id": liquidacion.conductor_id,
+            "nombre": f"{liquidacion.conductor.nombre} {liquidacion.conductor.apellido}".strip(),
+            "cedula": liquidacion.conductor.cedula,
+        },
+        "conductor_nombre": f"{liquidacion.conductor.nombre} {liquidacion.conductor.apellido}".strip(),
+        "cedula": liquidacion.conductor.cedula,
+        "fecha": liquidacion.fecha,
+        "fecha_inicio": liquidacion.fecha_inicio,
+        "fecha_fin": liquidacion.fecha_fin,
+        "jornadas_count": liquidacion.jornadas_count,
+        "total_jornadas": liquidacion.total_jornadas,
+        "total_adelantos_pendientes": liquidacion.total_adelantos_pendientes,
+        "abono_aplicado": liquidacion.abono_aplicado,
+        "ajuste_manual": liquidacion.ajuste_manual,
+        "total_pago": liquidacion.total_pago,
+        "notas": liquidacion.notas or "",
+        "jornadas": [
+            {
+                "id": detalle.jornada_id,
+                "fecha": detalle.fecha,
+                "vehiculo": detalle.vehiculo,
+                "kilometros_recorridos": detalle.kilometros_recorridos,
+                "ingreso_bruto": detalle.ingreso_bruto,
+                "pago_conductor": detalle.pago_conductor,
+            }
+            for detalle in detalles
+        ],
+    }
+
+
+def _obtener_jornadas_pendientes_liquidacion(user, conductor):
+    jornadas = JornadaDiaria.objects.select_related(
+        "conductor",
+        "vehiculo",
+        "sucursal"
+    ).filter(
+        conductor=conductor,
+        kilometraje_final__isnull=False,
+        pago_pendiente_conductor__gt=Decimal("0.00")
+    ).order_by("fecha", "id")
+
+    if es_superadmin(user):
+        if conductor.sucursal_id is None:
+            jornadas = jornadas.filter(sucursal__isnull=True)
+        else:
+            jornadas = jornadas.filter(sucursal=conductor.sucursal)
+
+    elif es_admin_sucursal(user):
+        jornadas = jornadas.filter(sucursal=user.sucursal)
+
+    elif es_taxista(user):
+        jornadas = jornadas.filter(conductor__usuario=user)
+
+    else:
+        jornadas = JornadaDiaria.objects.none()
+
+    return jornadas
+
+
+def _calcular_preview_liquidacion(user, conductor):
+    jornadas = _obtener_jornadas_pendientes_liquidacion(user, conductor)
+
+    total_jornadas = jornadas.aggregate(
+        total=Sum("pago_conductor")
+    )["total"] or Decimal("0.00")
+
+    adelantos = Adelanto.objects.select_related(
+        "estado",
+        "conductor"
+    ).filter(
+        conductor=conductor
+    ).order_by("fecha", "id")
+
+    if es_superadmin(user):
+        if conductor.sucursal_id is None:
+            adelantos = adelantos.filter(sucursal__isnull=True)
+        else:
+            adelantos = adelantos.filter(sucursal=conductor.sucursal)
+
+    elif es_admin_sucursal(user):
+        adelantos = adelantos.filter(sucursal=user.sucursal)
+
+    elif es_taxista(user):
+        adelantos = adelantos.filter(conductor__usuario=user)
+
+    total_adelantos = Decimal("0.00")
+    total_abonos = Decimal("0.00")
+    historial_adelantos = []
+
+    for movimiento in adelantos:
+        tipo = _tipo_movimiento_adelanto(movimiento)
+        monto = Decimal(movimiento.monto or "0.00")
+
+        if tipo == "ABONO":
+            total_abonos += monto
+        else:
+            total_adelantos += monto
+
+        historial_adelantos.append({
+            "id": movimiento.id,
+            "fecha": movimiento.fecha,
+            "tipo": tipo,
+            "tipo_display": "Abono" if tipo == "ABONO" else "Adelanto",
+            "estado_nombre": movimiento.estado.nombre if movimiento.estado else "Sin estado",
+            "estado_codigo": movimiento.estado.codigo if movimiento.estado else None,
+            "monto": movimiento.monto,
+            "observacion": movimiento.observacion or "",
+        })
+
+    pendiente_adelantos = total_adelantos - total_abonos
+
+    if pendiente_adelantos < 0:
+        pendiente_adelantos = Decimal("0.00")
+
+    fechas = list(jornadas.values_list("fecha", flat=True))
+
+    return {
+        "conductor": {
+            "id": conductor.id,
+            "nombre": f"{conductor.nombre} {conductor.apellido}".strip(),
+            "cedula": conductor.cedula,
+            "sucursal": conductor.sucursal_id,
+            "sucursal_nombre": conductor.sucursal.nombre if conductor.sucursal else None,
+        },
+        "jornadas_count": jornadas.count(),
+        "fecha_inicio": min(fechas) if fechas else None,
+        "fecha_fin": max(fechas) if fechas else None,
+        "total_jornadas": total_jornadas,
+        "total_adelantos": total_adelantos,
+        "total_abonos": total_abonos,
+        "pendiente_adelantos": pendiente_adelantos,
+        "historial_adelantos": historial_adelantos,
+        "jornadas": [
+            _serializar_jornada_liquidacion(jornada)
+            for jornada in jornadas
+        ],
+        "_jornadas_queryset": jornadas,
+    }
+
+
+class LiquidacionPreviewView(APIView):
+    permission_classes = [EsAdminSucursalOSuperAdmin]
+
+    def get(self, request):
+        conductor_id = request.query_params.get("conductor_id")
+
+        if not conductor_id:
+            return Response(
+                {"detail": "Debes seleccionar un conductor."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            conductor = Conductor.objects.select_related("sucursal").get(id=conductor_id)
+        except Conductor.DoesNotExist:
+            return Response(
+                {"detail": "El conductor seleccionado no existe."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        user = request.user
+
+        if es_admin_sucursal(user):
+            if not user.sucursal:
+                return Response(
+                    {"detail": "Tu usuario no tiene una sucursal asignada."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if conductor.sucursal_id != user.sucursal_id:
+                return Response(
+                    {"detail": "No puedes liquidar conductores de otra sucursal."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        preview = _calcular_preview_liquidacion(user, conductor)
+        preview.pop("_jornadas_queryset", None)
+
+        return Response(preview, status=status.HTTP_200_OK)
+
+
+class LiquidacionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        liquidaciones = Liquidacion.objects.select_related(
+            "conductor",
+            "sucursal",
+            "usuario"
+        ).prefetch_related(
+            "detalles"
+        ).all()
+
+        if es_superadmin(user):
+            liquidaciones = liquidaciones.filter(sucursal__isnull=True)
+
+        elif es_admin_sucursal(user):
+            if not user.sucursal:
+                return Response(
+                    {"detail": "Tu usuario no tiene una sucursal asignada."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            liquidaciones = liquidaciones.filter(sucursal=user.sucursal)
+
+        elif es_taxista(user):
+            liquidaciones = liquidaciones.filter(conductor__usuario=user)
+
+        else:
+            return Response(
+                {"detail": "No tienes permiso para consultar liquidaciones."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        data = [
+            _serializar_liquidacion(liquidacion)
+            for liquidacion in liquidaciones
+        ]
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        user = request.user
+
+        if not es_admin_o_superadmin(user):
+            return Response(
+                {"detail": "No tienes permiso para registrar liquidaciones."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        conductor_id = request.data.get("conductor_id") or request.data.get("conductor")
+
+        if not conductor_id:
+            return Response(
+                {"detail": "Debes seleccionar un conductor."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            conductor = Conductor.objects.select_related("sucursal").get(id=conductor_id)
+        except Conductor.DoesNotExist:
+            return Response(
+                {"detail": "El conductor seleccionado no existe."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if es_admin_sucursal(user):
+            if not user.sucursal:
+                return Response(
+                    {"detail": "Tu usuario no tiene una sucursal asignada."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if conductor.sucursal_id != user.sucursal_id:
+                return Response(
+                    {"detail": "No puedes liquidar conductores de otra sucursal."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        abono_aplicado = _decimal(request.data.get("abono_aplicado"))
+        ajuste_manual = _decimal(request.data.get("ajuste_manual"))
+        notas = request.data.get("notas", "")
+
+        if abono_aplicado < 0:
+            return Response(
+                {"detail": "El abono aplicado no puede ser negativo."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if ajuste_manual < 0:
+            return Response(
+                {"detail": "El ajuste manual no puede ser negativo."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        preview = _calcular_preview_liquidacion(user, conductor)
+        jornadas = preview["_jornadas_queryset"]
+
+        if not jornadas.exists():
+            return Response(
+                {"detail": "Este conductor no tiene jornadas pendientes de liquidación."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        total_jornadas = Decimal(preview["total_jornadas"] or "0.00")
+        pendiente_adelantos = Decimal(preview["pendiente_adelantos"] or "0.00")
+
+        if abono_aplicado > pendiente_adelantos:
+            return Response(
+                {"detail": "El abono aplicado no puede ser mayor al saldo pendiente de adelantos."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        total_pago = total_jornadas - abono_aplicado + ajuste_manual
+
+        if total_pago < 0:
+            total_pago = Decimal("0.00")
+
+        sucursal = conductor.sucursal
+
+        if es_superadmin(user) and conductor.sucursal_id is None:
+            sucursal = None
+
+        if es_admin_sucursal(user):
+            sucursal = user.sucursal
+
+        with transaction.atomic():
+            liquidacion = Liquidacion.objects.create(
+                sucursal=sucursal,
+                conductor=conductor,
+                usuario=user,
+                fecha=timezone.localdate(),
+                fecha_inicio=preview["fecha_inicio"],
+                fecha_fin=preview["fecha_fin"],
+                jornadas_count=preview["jornadas_count"],
+                total_jornadas=total_jornadas,
+                total_adelantos_pendientes=pendiente_adelantos,
+                abono_aplicado=abono_aplicado,
+                ajuste_manual=ajuste_manual,
+                total_pago=total_pago,
+                notas=notas,
+            )
+
+            for jornada in jornadas:
+                DetalleLiquidacion.objects.create(
+                    liquidacion=liquidacion,
+                    jornada=jornada,
+                    fecha=jornada.fecha,
+                    vehiculo=str(jornada.vehiculo) if jornada.vehiculo else "",
+                    kilometros_recorridos=jornada.kilometros_recorridos,
+                    ingreso_bruto=jornada.ingreso_bruto,
+                    pago_conductor=jornada.pago_conductor,
+                )
+
+            if abono_aplicado > 0:
+                estado_abono, _ = EstadoAdelanto.objects.get_or_create(
+                    codigo="abono",
+                    defaults={
+                        "nombre": "Abono",
+                        "activo": True,
+                    }
+                )
+
+                Adelanto.objects.create(
+                    sucursal=sucursal,
+                    conductor=conductor,
+                    estado=estado_abono,
+                    monto=abono_aplicado,
+                    fecha=timezone.localdate(),
+                    observacion=f"Abono aplicado en liquidación #{liquidacion.id}",
+                )
+
+            jornadas.update(
+                pago_pendiente_conductor=Decimal("0.00"),
+                saldo_adelanto_excedente=Decimal("0.00")
+            )
+
+        liquidacion = Liquidacion.objects.select_related(
+            "conductor",
+            "sucursal",
+            "usuario"
+        ).prefetch_related(
+            "detalles"
+        ).get(id=liquidacion.id)
+
+        return Response(
+            _serializar_liquidacion(liquidacion),
+            status=status.HTTP_201_CREATED
+        )
+
+
+class LiquidacionReciboView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk=None):
+        user = request.user
+
+        try:
+            liquidacion = Liquidacion.objects.select_related(
+                "conductor",
+                "sucursal",
+                "usuario"
+            ).prefetch_related(
+                "detalles"
+            ).get(pk=pk)
+        except Liquidacion.DoesNotExist:
+            return Response(
+                {"detail": "La liquidación solicitada no existe."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if es_admin_sucursal(user):
+            if liquidacion.sucursal_id != user.sucursal_id:
+                return Response(
+                    {"detail": "No puedes ver liquidaciones de otra sucursal."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        elif es_taxista(user):
+            if liquidacion.conductor.usuario_id != user.id:
+                return Response(
+                    {"detail": "No puedes ver liquidaciones de otro conductor."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        elif not es_superadmin(user):
+            return Response(
+                {"detail": "No tienes permiso para ver esta liquidación."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        return Response(
+            _serializar_liquidacion(liquidacion),
+            status=status.HTTP_200_OK
+        )
+
+

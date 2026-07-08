@@ -687,3 +687,112 @@ class ConfiguracionSistema(models.Model):
         if self.sucursal:
             return f"Configuración - {self.sucursal.nombre}"
         return "Configuración global"
+
+class Liquidacion(models.Model):
+    sucursal = models.ForeignKey(
+        Sucursal,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="liquidaciones"
+    )
+
+    conductor = models.ForeignKey(
+        Conductor,
+        on_delete=models.CASCADE,
+        related_name="liquidaciones"
+    )
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="liquidaciones_registradas"
+    )
+
+    fecha = models.DateField(default=timezone.localdate)
+    fecha_inicio = models.DateField(blank=True, null=True)
+    fecha_fin = models.DateField(blank=True, null=True)
+
+    jornadas_count = models.PositiveIntegerField(default=0)
+
+    total_jornadas = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    total_adelantos_pendientes = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    abono_aplicado = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    ajuste_manual = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    total_pago = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    notas = models.TextField(blank=True, null=True)
+    fecha_registro = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Liquidación"
+        verbose_name_plural = "Liquidaciones"
+        ordering = ["-fecha_registro", "-id"]
+
+    def __str__(self):
+        return f"Liquidación #{self.id} - {self.conductor}"
+
+
+class DetalleLiquidacion(models.Model):
+    liquidacion = models.ForeignKey(
+        Liquidacion,
+        on_delete=models.CASCADE,
+        related_name="detalles"
+    )
+
+    jornada = models.ForeignKey(
+        JornadaDiaria,
+        on_delete=models.PROTECT,
+        related_name="detalles_liquidacion"
+    )
+
+    fecha = models.DateField()
+    vehiculo = models.CharField(max_length=150, blank=True, null=True)
+
+    kilometros_recorridos = models.PositiveIntegerField(default=0)
+
+    ingreso_bruto = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    pago_conductor = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00")
+    )
+
+    class Meta:
+        verbose_name = "Detalle de liquidación"
+        verbose_name_plural = "Detalles de liquidación"
+        ordering = ["fecha", "id"]
+
+    def __str__(self):
+        return f"Liquidación #{self.liquidacion_id} - Jornada #{self.jornada_id}"
