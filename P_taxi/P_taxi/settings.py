@@ -33,15 +33,6 @@ DEBUG = os.getenv('DEBUG', 'False') == 'True'
 # Con DEBUG=False y ALLOWED_HOSTS vacío Django rechaza todas las peticiones.
 # Se define un default para desarrollo local; en producción se sobreescribe
 # con la variable de entorno ALLOWED_HOSTS (hosts separados por coma).
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.getenv(
-        "ALLOWED_HOSTS",
-        "localhost,127.0.0.1,[::1]"
-    ).split(",")
-    if host.strip()
-]
-
 CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "False") == "True"
 
 CORS_ALLOWED_ORIGINS = [
@@ -61,7 +52,6 @@ CSRF_TRUSTED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
-
 
 INSTALLED_APPS = [
     'django.contrib.admin',
