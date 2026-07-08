@@ -323,6 +323,27 @@ class ConductorSerializer(serializers.ModelSerializer):
                 "required": False,
                 "allow_null": True,
             },
+                        "licencia": {
+                "required": False,
+                "allow_blank": True,
+            },
+            "vencimiento_licencia": {
+                "required": False,
+                "allow_null": True,
+            },
+            "numero_licencia": {
+                "required": False,
+                "allow_blank": True,
+                "allow_null": True,
+            },
+            "fecha_inicio_licencia": {
+                "required": False,
+                "allow_null": True,
+            },
+            "fecha_vencimiento_licencia": {
+                "required": False,
+                "allow_null": True,
+            },
         }
 
     def get_nombre_completo(self, obj):
@@ -334,6 +355,38 @@ class ConductorSerializer(serializers.ModelSerializer):
 
         if not user:
             return attrs
+        
+        licencia = attrs.get(
+                    "licencia",
+                    getattr(self.instance, "licencia", None)
+                )
+
+        numero_licencia = attrs.get(
+                    "numero_licencia",
+                    getattr(self.instance, "numero_licencia", None)
+                )
+
+        vencimiento_licencia = attrs.get(
+                    "vencimiento_licencia",
+                    getattr(self.instance, "vencimiento_licencia", None)
+                )
+
+        fecha_vencimiento_licencia = attrs.get(
+                    "fecha_vencimiento_licencia",
+                    getattr(self.instance, "fecha_vencimiento_licencia", None)
+                )
+
+        if not licencia and numero_licencia:
+                    attrs["licencia"] = numero_licencia
+
+        if not numero_licencia and licencia:
+                    attrs["numero_licencia"] = licencia
+
+        if not vencimiento_licencia and fecha_vencimiento_licencia:
+                    attrs["vencimiento_licencia"] = fecha_vencimiento_licencia
+
+        if not fecha_vencimiento_licencia and vencimiento_licencia:
+                    attrs["fecha_vencimiento_licencia"] = vencimiento_licencia
 
         cedula = attrs.get("cedula", getattr(self.instance, "cedula", None))
 
@@ -865,13 +918,14 @@ class AdelantoSerializer(serializers.ModelSerializer):
             "id",
             "sucursal",
             "sucursal_nombre",
+            "estado",
             "conductor_nombre",
             "estado_nombre",
             "estado_codigo",
         ]
         extra_kwargs = {
             "jornada": {"required": False, "allow_null": True},
-            "estado": {"required": False, "allow_null": True},
+           
         }
 
     def get_conductor_nombre(self, obj):

@@ -4,6 +4,7 @@ from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q, Sum
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 
 from rest_framework import status, viewsets
 from django.db.models.functions import TruncMonth
@@ -761,6 +762,56 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
             return
 
         raise PermissionDenied("No tienes permiso para modificar asignaciones.")
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="finalizar",
+        permission_classes=[EsAdminSucursalOSuperAdmin]
+    )
+    def finalizar(self, request, pk=None):
+        asignacion = self.get_object()
+        user = request.user
+
+        if es_admin_sucursal(user):
+            if not user.sucursal:
+                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+
+            if asignacion.sucursal_id != user.sucursal_id:
+                raise PermissionDenied(
+                    "No puedes finalizar asignaciones de otra sucursal."
+                )
+
+        if not asignacion.activa:
+            return Response(
+                {"detail": "Esta asignación ya está finalizada."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        fecha_fin = request.data.get("fecha_fin")
+
+        if fecha_fin:
+            fecha_fin = parse_date(str(fecha_fin))
+
+            if not fecha_fin:
+                raise ValidationError({
+                    "fecha_fin": "La fecha final no tiene un formato válido. Usa YYYY-MM-DD."
+                })
+        else:
+            fecha_fin = timezone.localdate()
+
+        if fecha_fin < asignacion.fecha_inicio:
+            raise ValidationError({
+                "fecha_fin": "La fecha final no puede ser menor que la fecha de inicio."
+            })
+
+        asignacion.activa = False
+        asignacion.fecha_fin = fecha_fin
+        asignacion.save(update_fields=["activa", "fecha_fin"])
+
+        return Response(
+            self.get_serializer(asignacion).data,
+            status=status.HTTP_200_OK
+        )
 
 class JornadaDiariaViewSet(viewsets.ModelViewSet):
     serializer_class = JornadaDiariaSerializer
@@ -1377,21 +1428,35 @@ class AdelantoViewSet(viewsets.ModelViewSet):
         return qs.none()
 
     def _resolver_estado(self, tipo, estado_actual=None):
-        # El frontend manda "tipo" (ADELANTO/ABONO). Lo traducimos a un
-        # EstadoAdelanto por código. Si no viene tipo, se conserva el estado
-        # actual (caso edición que no cambia el tipo). get_or_create garantiza
-        # que el catálogo tenga los estados válidos aunque falten en la BD
-        # (robustez para la MySQL de Wilder).
-        if not tipo:
-            return estado_actual
+        tipo_limpio = str(tipo or "").strip().upper()
 
-        codigo = "abono" if str(tipo).strip().upper() == "ABONO" else "adelanto"
-        nombre = "Abono" if codigo == "abono" else "Adelanto"
+        if not tipo_limpio:
+            if estado_actual:
+                return estado_actual
+
+            tipo_limpio = "ADELANTO"
+
+        tipos_validos = {
+            "ADELANTO": ("adelanto", "Adelanto"),
+            "ANTICIPO": ("adelanto", "Adelanto"),
+            "ABONO": ("abono", "Abono"),
+        }
+
+        if tipo_limpio not in tipos_validos:
+            raise ValidationError({
+                "tipo": "Tipo de movimiento inválido. Usa ADELANTO o ABONO."
+            })
+
+        codigo, nombre = tipos_validos[tipo_limpio]
 
         estado, _ = EstadoAdelanto.objects.get_or_create(
             codigo=codigo,
-            defaults={"nombre": nombre, "activo": True},
+            defaults={
+                "nombre": nombre,
+                "activo": True,
+            }
         )
+
         return estado
 
     def _resolver_sucursal_conductor(self, jornada, conductor):
