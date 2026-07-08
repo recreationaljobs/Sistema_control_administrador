@@ -1,7 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -82,8 +82,9 @@ def calcular_campos_jornada(
 
 
 def recalcular_totales_jornada(jornada):
-    total_adelantos = jornada.adelantos.exclude(
-        estado__codigo="anulado"
+    total_adelantos = jornada.adelantos.filter(
+        Q(estado__codigo__iexact="adelanto") |
+        Q(estado__codigo__iexact="anticipo")
     ).aggregate(
         total=Sum("monto")
     )["total"] or Decimal("0.00")
