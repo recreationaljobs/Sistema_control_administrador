@@ -34,6 +34,14 @@ DEBUG = os.getenv('DEBUG', 'False') == 'True'
 # Se define un default para desarrollo local; en producción se sobreescribe
 # con la variable de entorno ALLOWED_HOSTS (hosts separados por coma).
 CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "False") == "True"
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv(
+        "ALLOWED_HOSTS",
+        "127.0.0.1,localhost,[::1],sistema-control-administrador.onrender.com"
+    ).split(",")
+    if host.strip()
+]
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
