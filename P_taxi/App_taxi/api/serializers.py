@@ -276,6 +276,7 @@ class ConductorSerializer(serializers.ModelSerializer):
         source="numero_licencia",
         read_only=True
     )
+
     vencimiento_licencia = serializers.DateField(
         source="fecha_vencimiento_licencia",
         read_only=True
@@ -304,12 +305,14 @@ class ConductorSerializer(serializers.ModelSerializer):
             "fecha_registro",
             "activo",
         ]
+
         read_only_fields = [
             "id",
             "fecha_registro",
             "licencia",
             "vencimiento_licencia",
         ]
+
         extra_kwargs = {
             "sucursal": {
                 "required": False,
@@ -322,14 +325,6 @@ class ConductorSerializer(serializers.ModelSerializer):
             "porcentaje_pago": {
                 "required": True,
                 "allow_null": False,
-            },
-                        "licencia": {
-                "required": False,
-                "allow_blank": True,
-            },
-            "vencimiento_licencia": {
-                "required": False,
-                "allow_null": True,
             },
             "numero_licencia": {
                 "required": False,
@@ -353,44 +348,10 @@ class ConductorSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         user = request.user if request else None
 
-        if not user:
-            return attrs
-        
-        licencia = attrs.get(
-                    "licencia",
-                    getattr(self.instance, "licencia", None)
-                )
-
-        numero_licencia = attrs.get(
-                    "numero_licencia",
-                    getattr(self.instance, "numero_licencia", None)
-                )
-
-        vencimiento_licencia = attrs.get(
-                    "vencimiento_licencia",
-                    getattr(self.instance, "vencimiento_licencia", None)
-                )
-
-        fecha_vencimiento_licencia = attrs.get(
-                    "fecha_vencimiento_licencia",
-                    getattr(self.instance, "fecha_vencimiento_licencia", None)
-                )
-        
-        
-
-        if not licencia and numero_licencia:
-                    attrs["licencia"] = numero_licencia
-
-        if not numero_licencia and licencia:
-                    attrs["numero_licencia"] = licencia
-
-        if not vencimiento_licencia and fecha_vencimiento_licencia:
-                    attrs["vencimiento_licencia"] = fecha_vencimiento_licencia
-
-        if not fecha_vencimiento_licencia and vencimiento_licencia:
-                    attrs["fecha_vencimiento_licencia"] = vencimiento_licencia
-
-        cedula = attrs.get("cedula", getattr(self.instance, "cedula", None))
+        cedula = attrs.get(
+            "cedula",
+            getattr(self.instance, "cedula", None)
+        )
 
         porcentaje_pago = attrs.get(
             "porcentaje_pago",
@@ -411,9 +372,10 @@ class ConductorSerializer(serializers.ModelSerializer):
 
         attrs["porcentaje_pago"] = porcentaje_pago.quantize(Decimal("0.01"))
 
-        if user.rol and user.rol.codigo == "superadmin":
-            # superadmin gestiona todas las sucursales: al crear, el conductor
-            # es global; al editar, se conserva su sucursal actual.
+        if not user:
+            return attrs
+
+        if user.rol and user.rol.codigo in ["superadmin", "super_admin"]:
             sucursal = self.instance.sucursal if self.instance else None
             attrs["sucursal"] = sucursal
 
