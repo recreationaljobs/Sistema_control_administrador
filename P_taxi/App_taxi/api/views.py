@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -2569,7 +2570,7 @@ class LiquidacionView(APIView):
     def post(self, request):
         user = request.user
 
-        if not es_admin_o_superadmin(user):
+        if not (es_superadmin(user) or es_admin_sucursal(user)):
             return Response(
                 {"detail": "No tienes permiso para registrar liquidaciones."},
                 status=status.HTTP_403_FORBIDDEN
