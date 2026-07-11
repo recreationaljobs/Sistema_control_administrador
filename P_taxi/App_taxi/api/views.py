@@ -87,6 +87,7 @@ from .services import (
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         username = request.data.get("username")
@@ -101,7 +102,7 @@ class LoginView(APIView):
             )
 
         user = authenticate(
-            request,
+            request=request,
             username=username,
             password=password
         )
@@ -150,7 +151,6 @@ class LoginView(APIView):
             },
             status=status.HTTP_200_OK
         )
-
 
 class MiPerfilView(APIView):
     permission_classes = [IsAuthenticated]
