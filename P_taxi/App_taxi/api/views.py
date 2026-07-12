@@ -319,18 +319,32 @@ class UsuarioViewSet(viewsets.ModelViewSet):
         ).all().order_by("-id")
 
         if es_superadmin(user):
-            return queryset
-
-        if es_admin_sucursal(user):
-            if not user.sucursal:
-                return queryset.none()
-
-            return queryset.filter(
-                sucursal=user.sucursal
-            ).exclude(
-                rol__codigo__in=["superadmin", "usuario_sistema", "admin_sucursal"]
+            # El superadministrador no verá taxistas que
+            # pertenezcan a una sucursal.
+            #
+            # Sí seguirá viendo:
+            # - superadmin
+            # - usuario_sistema
+            # - admin_sucursal
+            # - taxistas sin sucursal
+            return queryset.exclude(
+                rol__codigo="taxista",
+                sucursal__isnull=False
             )
 
+        if es_admin_sucursal(user):
+            if not user.sucursal_id:
+                return queryset.none()
+
+            # El administrador de sucursal solamente puede
+            # ver los taxistas de su propia sucursal.
+            return queryset.filter(
+                sucursal_id=user.sucursal_id,
+                rol__codigo="taxista"
+            )
+
+        # Cualquier otro usuario solo puede consultar
+        # su propia cuenta.
         return queryset.filter(id=user.id)
 
     def get_serializer_context(self):
@@ -382,16 +396,22 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             return
 
         if es_admin_sucursal(user):
-            if not user.sucursal:
-                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+            if not user.sucursal_id:
+                raise ValidationError(
+                    "Tu usuario no tiene una sucursal asignada."
+                )
 
             if not rol or rol.codigo != "taxista":
-                raise PermissionDenied("Un administrador de sucursal solo puede crear usuarios taxistas.")
+                raise PermissionDenied(
+                    "Un administrador de sucursal solo puede crear usuarios taxistas."
+                )
 
-            serializer.save()
+            # La sucursal siempre se toma del administrador
+            # autenticado, nunca del frontend.
+            serializer.save(
+                sucursal=user.sucursal
+            )
             return
-
-        raise PermissionDenied("No tienes permiso para crear usuarios.")
 
 
     def perform_update(self, serializer):
@@ -404,16 +424,27 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             return
 
         if es_admin_sucursal(user):
+            if not user.sucursal_id:
+                raise ValidationError(
+                    "Tu usuario no tiene una sucursal asignada."
+                )
+
             if instance.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes modificar usuarios de otra sucursal.")
+                raise PermissionDenied(
+                    "No puedes modificar usuarios de otra sucursal."
+                )
 
             if not rol or rol.codigo != "taxista":
-                raise PermissionDenied("Un administrador de sucursal solo puede modificar usuarios taxistas.")
+                raise PermissionDenied(
+                    "Un administrador de sucursal solo puede modificar usuarios taxistas."
+                )
 
-            serializer.save()
+            # Impide que el usuario sea trasladado a otra
+            # sucursal enviando otro ID desde el frontend.
+            serializer.save(
+                sucursal=user.sucursal
+            )
             return
-
-        raise PermissionDenied("No tienes permiso para modificar usuarios.")
 
 
 class ConductorViewSet(viewsets.ModelViewSet):
