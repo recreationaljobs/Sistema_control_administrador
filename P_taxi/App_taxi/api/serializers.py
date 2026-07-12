@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from decimal import Decimal
 from django.db.models import Sum
+from django.contrib.auth.password_validation import validate_password as django_validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from ..models import (
     Sucursal,
@@ -98,7 +100,8 @@ class UsuarioSerializer(serializers.ModelSerializer):
     password = serializers.CharField(
         write_only=True,
         required=False,
-        allow_blank=True
+        allow_blank=False,
+        trim_whitespace=False,
     )
 
     class Meta:
@@ -124,6 +127,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
         ]
 
         read_only_fields = [
+            "is_active",
             "is_staff",
             "is_superuser",
             "rol_nombre",
@@ -150,6 +154,13 @@ class UsuarioSerializer(serializers.ModelSerializer):
             return None
 
         return f"{conductor.nombre} {conductor.apellido}".strip()
+
+    def validate_password(self, value):
+        try:
+            django_validate_password(value, user=self.instance)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return value
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -308,6 +319,8 @@ class ConductorSerializer(serializers.ModelSerializer):
 
         read_only_fields = [
             "id",
+            "sucursal",
+            "usuario",
             "fecha_registro",
             "licencia",
             "vencimiento_licencia",
@@ -991,6 +1004,8 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
 
         read_only_fields = [
             "id",
+            "sucursal",
+            "porcentaje_pago_conductor",
             "sucursal_nombre",
             "estado_nombre",
             "estado_codigo",
@@ -1261,4 +1276,4 @@ class ConfiguracionSistemaSerializer(serializers.ModelSerializer):
             "km_aviso_mantenimiento",
             "moneda",
         ]
-        read_only_fields = ["id", "sucursal_nombre"]
+        read_only_fields = ["id", "sucursal", "sucursal_nombre"]

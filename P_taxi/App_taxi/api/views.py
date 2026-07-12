@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -61,6 +61,8 @@ from .serializers import (
     
 )
 
+from rest_framework.throttling import SimpleRateThrottle
+
 from .permissions import (
     EsSuperAdmin,
     EsAdminSucursalOSuperAdmin,
@@ -85,9 +87,31 @@ from .services import (
 )
 
 
+
+class LoginRateThrottle(SimpleRateThrottle):
+    """Limita los intentos de inicio de sesión por IP y usuario."""
+
+    scope = "login"
+    rate = "5/min"
+
+    def get_cache_key(self, request, view):
+        ip = self.get_ident(request)
+        username = str(
+            request.data.get("username", "")
+        ).strip().lower()[:150]
+
+        ident = f"{ip}:{username or 'sin-usuario'}"
+
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": ident,
+        }
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         username = request.data.get("username")
@@ -139,7 +163,9 @@ class LoginView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        token, created = Token.objects.get_or_create(user=user)
+        # Rota el token para invalidar credenciales antiguas robadas.
+        Token.objects.filter(user=user).delete()
+        token = Token.objects.create(user=user)
 
         return Response(
             {
@@ -151,6 +177,17 @@ class LoginView(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        Token.objects.filter(user=request.user).delete()
+        return Response(
+            {"detail": "Sesión cerrada correctamente."},
+            status=status.HTTP_200_OK
+        )
+
 
 class MiPerfilView(APIView):
     permission_classes = [IsAuthenticated]
@@ -193,13 +230,21 @@ class RolViewSet(viewsets.ModelViewSet):
 class EstadoVehiculoViewSet(viewsets.ModelViewSet):
     queryset = EstadoVehiculo.objects.all().order_by("nombre")
     serializer_class = EstadoVehiculoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        return [EsSuperAdmin()]
 
 
 class EstadoJornadaViewSet(viewsets.ModelViewSet):
     queryset = EstadoJornada.objects.all().order_by("nombre")
     serializer_class = EstadoJornadaSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        return [EsSuperAdmin()]
 
 
 class TipoGastoViewSet(viewsets.ModelViewSet):
@@ -210,7 +255,7 @@ class TipoGastoViewSet(viewsets.ModelViewSet):
         if self.action in ["list", "retrieve"]:
             return [IsAuthenticated()]
 
-        return [EsAdminSucursalOSuperAdmin()]
+        return [EsSuperAdmin()]
 
 class EstadoGastoViewSet(viewsets.ModelViewSet):
     queryset = EstadoGasto.objects.all().order_by("nombre")
@@ -220,25 +265,37 @@ class EstadoGastoViewSet(viewsets.ModelViewSet):
         if self.action in ["list", "retrieve"]:
             return [IsAuthenticated()]
 
-        return [EsAdminSucursalOSuperAdmin()]
+        return [EsSuperAdmin()]
 
 
 class EstadoAdelantoViewSet(viewsets.ModelViewSet):
     queryset = EstadoAdelanto.objects.all().order_by("nombre")
     serializer_class = EstadoAdelantoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        return [EsSuperAdmin()]
 
 
 class TipoMantenimientoViewSet(viewsets.ModelViewSet):
     queryset = TipoMantenimiento.objects.all().order_by("nombre")
     serializer_class = TipoMantenimientoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        return [EsSuperAdmin()]
 
 
 class EstadoMantenimientoViewSet(viewsets.ModelViewSet):
     queryset = EstadoMantenimiento.objects.all().order_by("nombre")
     serializer_class = EstadoMantenimientoSerializer
-    permission_classes = [EsAdminSucursalOSuperAdmin]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        return [EsSuperAdmin()]
 
 
 class UsuarioViewSet(viewsets.ModelViewSet):
@@ -821,8 +878,14 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
     serializer_class = JornadaDiariaSerializer
 
     def get_permissions(self):
-        if self.action == "destroy":
+        if self.action in [
+            "update",
+            "partial_update",
+            "destroy",
+            "registrar_ingreso",
+        ]:
             return [EsAdminSucursalOSuperAdmin()]
+
         return [IsAuthenticated()]
 
     def get_serializer_context(self):
@@ -1111,7 +1174,7 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
 
         try:
             kilometraje_final = int(kilometraje_final)
-        except ValueError:
+        except (TypeError, ValueError):
             raise ValidationError({
                 "kilometraje_final": "El kilometraje final debe ser un número válido."
             })
@@ -1165,7 +1228,12 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(jornada)
         return Response(serializer.data)
     
-    @action(detail=True, methods=["patch"], url_path="registrar-ingreso")
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path="registrar-ingreso",
+        permission_classes=[EsAdminSucursalOSuperAdmin],
+    )
     def registrar_ingreso(self, request, pk=None):
         jornada = self.get_object()
         user = request.user
@@ -1193,8 +1261,8 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
                 "tipo_cobro": "El tipo de cobro debe ser porcentaje o alquiler."
             })
 
-        ingreso_bruto = Decimal(str(request.data.get("ingreso_bruto", "0.00") or "0.00"))
-        monto_alquiler = Decimal(str(request.data.get("monto_alquiler", "0.00") or "0.00"))
+        ingreso_bruto = _decimal(request.data.get("ingreso_bruto"))
+        monto_alquiler = _decimal(request.data.get("monto_alquiler"))
 
         # Prioridad del %: body explicito > conductor.porcentaje_pago > config de sucursal.
                # El porcentaje siempre sale del conductor.
@@ -1707,7 +1775,10 @@ class MantenimientoViewSet(viewsets.ModelViewSet):
 
 
 class ConfiguracionSistemaView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAuthenticated()]
+        return [EsAdminSucursalOSuperAdmin()]
 
     def get_configuracion(self, user):
         if es_superadmin(user):
@@ -1788,7 +1859,7 @@ class ConfiguracionSistemaView(APIView):
 
 
 class DashboardResumenView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [EsAdminSucursalOSuperAdmin]
 
     def get(self, request):
         user = request.user
@@ -1943,7 +2014,7 @@ class DashboardResumenView(APIView):
         return Response(data)
 
 class ReporteFinancieroView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [EsAdminSucursalOSuperAdmin]
 
     def get(self, request):
         user = request.user
@@ -2037,7 +2108,7 @@ class ReporteFinancieroView(APIView):
 
 
 class ReporteKilometrajeView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [EsAdminSucursalOSuperAdmin]
 
     def get(self, request):
         user = request.user
@@ -2157,7 +2228,7 @@ class AlertasMantenimientoView(APIView):
         return Response(alertas)
 
 class DashboardFinancieroView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [EsAdminSucursalOSuperAdmin]
 
     def get_queryset_por_usuario(self, modelo):
         user = self.request.user
@@ -2301,7 +2372,15 @@ class DashboardFinancieroView(APIView):
         return Response(data)
 
 def _decimal(valor):
-    return Decimal(valor or "0.00")
+    try:
+        numero = Decimal(str(valor or "0.00"))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValidationError({"detail": "El monto enviado no es válido."})
+
+    if not numero.is_finite():
+        raise ValidationError({"detail": "El monto enviado no es válido."})
+
+    return numero.quantize(Decimal("0.01"))
 
 
 def _tipo_movimiento_adelanto(adelanto):
@@ -2526,7 +2605,10 @@ class LiquidacionPreviewView(APIView):
 
 
 class LiquidacionView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [EsAdminSucursalOSuperAdmin()]
+        return [IsAuthenticated()]
 
     def get(self, request):
         user = request.user
@@ -2761,5 +2843,3 @@ class LiquidacionReciboView(APIView):
             _serializar_liquidacion(liquidacion),
             status=status.HTTP_200_OK
         )
-
-
