@@ -1,5 +1,5 @@
 from decimal import Decimal, InvalidOperation
-
+import logging
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
@@ -15,6 +15,10 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from App_taxi.email_services import (
+    enviar_correo_usuario_creado,
+)
 
 from ..models import (
     Sucursal,
@@ -86,7 +90,7 @@ from .services import (
     sumar_entero,
 )
 
-
+logger = logging.getLogger(__name__)
 
 class LoginRateThrottle(SimpleRateThrottle):
     """Limita los intentos de inicio de sesión por IP y usuario."""
@@ -386,6 +390,93 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             self.get_serializer(usuario).data,
             status=status.HTTP_200_OK
         )
+    
+
+    def create(
+        self,
+        request,
+        *args,
+        **kwargs
+    ):
+        password_plano = str(
+            request.data.get(
+                "password",
+                ""
+            )
+        ).strip()
+
+        serializer = self.get_serializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        # /*
+        # * No se reemplaza perform_create.
+        # * Se sigue llamando para conservar
+        # * las reglas de permisos y sucursal.
+        # */
+        self.perform_create(serializer)
+
+        usuario = serializer.instance
+
+        correo_enviado = False
+        error_correo = None
+
+        correo_usuario = (
+            usuario.email or ""
+        ).strip()
+
+        if correo_usuario and password_plano:
+            try:
+                correo_enviado = (
+                    enviar_correo_usuario_creado(
+                        usuario=usuario,
+                        password_plano=password_plano,
+                    )
+                )
+            except Exception as error:
+                error_correo = str(error)
+
+                logger.exception(
+                    "No se pudo enviar el correo "
+                    "de registro al usuario %s.",
+                    usuario.id,
+                )
+
+        headers = self.get_success_headers(
+            serializer.data
+        )
+
+        respuesta = dict(
+            serializer.data
+        )
+
+        respuesta["correo_enviado"] = (
+            correo_enviado
+        )
+
+        respuesta["correo_destino"] = (
+            correo_usuario
+            if correo_usuario
+            else None
+        )
+
+        if error_correo:
+            respuesta["correo_error"] = (
+                "El usuario fue creado, "
+                "pero no se pudo enviar el correo."
+            )
+
+        return Response(
+            respuesta,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+
 
     def perform_create(self, serializer):
         user = self.request.user
