@@ -484,3 +484,21 @@ SISTEMA_LOGIN_URL = os.getenv(
     "SISTEMA_LOGIN_URL",
     "https://taxiadmin.servitaxitortuguero.com/login"
 )
+
+
+# ============================================================
+# NOTIFICACIONES PUSH
+# ============================================================
+
+FIREBASE_CREDENTIALS_PATH = os.getenv(
+    "FIREBASE_CREDENTIALS_PATH",
+    ""
+)
+
+FRONTEND_JORNADAS_URL = os.getenv(
+    "FRONTEND_JORNADAS_URL",
+    (
+        "https://taxiadmin.servitaxitortuguero.com/"
+        "dashboard/jornadas"
+    )
+)

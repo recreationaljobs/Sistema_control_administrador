@@ -30,6 +30,8 @@ from .views import (
     LiquidacionView,
     LiquidacionPreviewView,
     LiquidacionReciboView,
+    RegistrarDispositivoNotificacionView,
+    DesactivarDispositivoNotificacionView,
 )
 
 router = DefaultRouter()
@@ -95,4 +97,14 @@ urlpatterns = [
     path("liquidaciones/preview/", LiquidacionPreviewView.as_view(), name="liquidaciones-preview"),
     path("liquidaciones/<int:pk>/recibo/", LiquidacionReciboView.as_view(), name="liquidaciones-recibo"),
     path("mantenimiento/alertas/", AlertasMantenimientoView.as_view(), name="alertas-mantenimiento"),
+    path(
+    "notificaciones/dispositivos/registrar/",
+    RegistrarDispositivoNotificacionView.as_view(),
+    name="registrar-dispositivo-notificacion",
+),
+path(
+    "notificaciones/dispositivos/desactivar/",
+    DesactivarDispositivoNotificacionView.as_view(),
+    name="desactivar-dispositivo-notificacion",
+),
 ]

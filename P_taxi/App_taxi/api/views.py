@@ -15,6 +15,9 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from App_taxi.models import (
+    DispositivoNotificacion,
+)
 
 from App_taxi.email_services import (
     enviar_correo_usuario_creado,
@@ -91,6 +94,113 @@ from .services import (
 )
 
 logger = logging.getLogger(__name__)
+class RegistrarDispositivoNotificacionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        rol_codigo = getattr(
+            getattr(
+                request.user,
+                "rol",
+                None,
+            ),
+            "codigo",
+            "",
+        )
+
+        if rol_codigo != "taxista":
+            return Response(
+                {
+                    "detail": (
+                        "Solo los usuarios taxistas "
+                        "pueden activar estas notificaciones."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        token = str(
+            request.data.get("token") or ""
+        ).strip()
+
+        if not token:
+            return Response(
+                {
+                    "token": (
+                        "Debes enviar el token "
+                        "del dispositivo."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        dispositivo, creado = (
+            DispositivoNotificacion.objects
+            .update_or_create(
+                token=token,
+                defaults={
+                    "usuario": request.user,
+                    "activo": True,
+                },
+            )
+        )
+
+        return Response(
+            {
+                "detail": (
+                    "Notificaciones activadas "
+                    "correctamente."
+                ),
+                "dispositivo_id": dispositivo.id,
+                "creado": creado,
+            },
+            status=(
+                status.HTTP_201_CREATED
+                if creado
+                else status.HTTP_200_OK
+            ),
+        )
+
+
+class DesactivarDispositivoNotificacionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        token = str(
+            request.data.get("token") or ""
+        ).strip()
+
+        if not token:
+            return Response(
+                {
+                    "token": (
+                        "Debes enviar el token "
+                        "del dispositivo."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        actualizados = (
+            DispositivoNotificacion.objects
+            .filter(
+                usuario=request.user,
+                token=token,
+            )
+            .update(
+                activo=False
+            )
+        )
+
+        return Response(
+            {
+                "detail": (
+                    "Notificaciones desactivadas."
+                ),
+                "actualizados": actualizados,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 class LoginRateThrottle(SimpleRateThrottle):
     """Limita los intentos de inicio de sesión por IP y usuario."""

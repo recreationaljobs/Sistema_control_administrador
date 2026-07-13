@@ -796,3 +796,100 @@ class DetalleLiquidacion(models.Model):
 
     def __str__(self):
         return f"Liquidación #{self.liquidacion_id} - Jornada #{self.jornada_id}"
+    
+
+class DispositivoNotificacion(models.Model):
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="dispositivos_notificacion",
+    )
+
+    token = models.CharField(
+        max_length=512,
+        unique=True,
+    )
+
+    activo = models.BooleanField(
+        default=True
+    )
+
+    fecha_registro = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True
+    )
+
+    def __str__(self):
+        return (
+            f"{self.usuario.username} - "
+            f"{'Activo' if self.activo else 'Inactivo'}"
+        )
+
+
+class RegistroNotificacion(models.Model):
+    TIPO_APERTURA = "JORNADA_NO_INICIADA"
+    TIPO_CIERRE = "JORNADA_NO_CERRADA"
+
+    TIPOS = [
+        (
+            TIPO_APERTURA,
+            "Jornada no iniciada",
+        ),
+        (
+            TIPO_CIERRE,
+            "Jornada no cerrada",
+        ),
+    ]
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="registros_notificacion",
+    )
+
+    tipo = models.CharField(
+        max_length=40,
+        choices=TIPOS,
+    )
+
+    fecha_jornada = models.DateField()
+
+    titulo = models.CharField(
+        max_length=150
+    )
+
+    mensaje = models.TextField()
+
+    enviada = models.BooleanField(
+        default=False
+    )
+
+    fecha_envio = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "usuario",
+                    "tipo",
+                    "fecha_jornada",
+                ],
+                name=(
+                    "notificacion_jornada_"
+                    "unica_por_usuario"
+                ),
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.usuario.username} - "
+            f"{self.tipo} - "
+            f"{self.fecha_jornada}"
+        )
