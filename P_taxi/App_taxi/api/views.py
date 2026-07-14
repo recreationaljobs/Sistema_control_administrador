@@ -173,22 +173,23 @@ class RegistrarDispositivoNotificacionView(APIView):
 
         if codigo_rol == "taxista":
             tipo_notificaciones = (
-                "Recordatorios de apertura y cierre "
-                "de jornada."
+                "Recibirás recordatorios para abrir "
+                "y cerrar tu jornada."
             )
 
         elif codigo_rol == "admin_sucursal":
             tipo_notificaciones = (
-                "Alertas de mantenimiento y cambio "
-                "de aceite únicamente de los vehículos "
-                "de tu sucursal."
+                "Recibirás alertas de mantenimiento "
+                "y cambio de aceite únicamente de los "
+                "vehículos registrados en tu sucursal."
             )
 
         else:
             tipo_notificaciones = (
-                "Alertas de mantenimiento y cambio "
-                "de aceite únicamente de los vehículos "
-                "del panel del superadministrador."
+                "Recibirás alertas de mantenimiento "
+                "y cambio de aceite únicamente de los "
+                "vehículos sin sucursal que pertenecen "
+                "al panel del superadministrador."
             )
 
         return Response(
