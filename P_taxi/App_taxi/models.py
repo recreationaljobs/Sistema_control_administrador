@@ -603,7 +603,9 @@ class Mantenimiento(models.Model):
     sucursal = models.ForeignKey(
         Sucursal,
         on_delete=models.CASCADE,
-        related_name="mantenimientos"
+        related_name="mantenimientos",
+        blank=True,
+        null=True,
     )
 
     vehiculo = models.ForeignKey(

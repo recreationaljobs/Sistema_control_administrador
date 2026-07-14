@@ -71,7 +71,13 @@ class EstadoAdelantoSerializer(serializers.ModelSerializer):
 class TipoMantenimientoSerializer(serializers.ModelSerializer):
     class Meta:
         model = TipoMantenimiento
-        fields = ["id", "nombre", "codigo", "activo"]
+        fields = [
+            "id",
+            "nombre",
+            "codigo",
+            "intervalo_km",
+            "activo",
+        ]
 
 
 class EstadoMantenimientoSerializer(serializers.ModelSerializer):
@@ -1213,49 +1219,151 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
         return attrs
 
 class MantenimientoSerializer(serializers.ModelSerializer):
-    sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
-    vehiculo_placa = serializers.CharField(source="vehiculo.placa", read_only=True)
-    tipo_mantenimiento_nombre = serializers.CharField(source="tipo_mantenimiento.nombre", read_only=True)
-    tipo_mantenimiento_codigo = serializers.CharField(source="tipo_mantenimiento.codigo", read_only=True)
-    estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
-    estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
+    sucursal_nombre = serializers.CharField(
+        source="sucursal.nombre",
+        read_only=True,
+        allow_null=True,
+    )
+
+    vehiculo_placa = serializers.CharField(
+        source="vehiculo.placa",
+        read_only=True,
+    )
+
+    vehiculo_numero = serializers.CharField(
+        source="vehiculo.numero",
+        read_only=True,
+    )
+
+    vehiculo_descripcion = serializers.SerializerMethodField()
+
+    tipo_mantenimiento_nombre = serializers.CharField(
+        source="tipo_mantenimiento.nombre",
+        read_only=True,
+    )
+
+    tipo_mantenimiento_codigo = serializers.CharField(
+        source="tipo_mantenimiento.codigo",
+        read_only=True,
+    )
+
+    estado_nombre = serializers.CharField(
+        source="estado.nombre",
+        read_only=True,
+    )
+
+    estado_codigo = serializers.CharField(
+        source="estado.codigo",
+        read_only=True,
+    )
 
     class Meta:
         model = Mantenimiento
+
         fields = [
             "id",
             "sucursal",
             "sucursal_nombre",
+
             "vehiculo",
             "vehiculo_placa",
+            "vehiculo_numero",
+            "vehiculo_descripcion",
+
             "tipo_mantenimiento",
             "tipo_mantenimiento_nombre",
             "tipo_mantenimiento_codigo",
+
             "estado",
             "estado_nombre",
             "estado_codigo",
+
             "descripcion",
             "costo",
             "fecha",
+
             "kilometraje",
             "proximo_km_sugerido",
         ]
+
         read_only_fields = [
             "id",
+
+            # La sucursal la determina exclusivamente el backend.
+            "sucursal",
             "sucursal_nombre",
+
             "vehiculo_placa",
+            "vehiculo_numero",
+            "vehiculo_descripcion",
+
             "tipo_mantenimiento_nombre",
             "tipo_mantenimiento_codigo",
+
             "estado_nombre",
             "estado_codigo",
+
+            # Ambos valores serán calculados por el backend.
+            "kilometraje",
+            "proximo_km_sugerido",
         ]
 
-    def validate(self, attrs):
-        sucursal = attrs.get("sucursal", getattr(self.instance, "sucursal", None))
-        vehiculo = attrs.get("vehiculo", getattr(self.instance, "vehiculo", None))
+        extra_kwargs = {
+            "vehiculo": {
+                "required": True,
+                "allow_null": False,
+            },
+            "tipo_mantenimiento": {
+                "required": True,
+                "allow_null": False,
+            },
+            "estado": {
+                "required": True,
+                "allow_null": False,
+            },
+            "descripcion": {
+                "required": False,
+                "allow_blank": True,
+                "allow_null": True,
+            },
+            "costo": {
+                "required": False,
+            },
+        }
 
-        if sucursal and vehiculo and sucursal.id != vehiculo.sucursal_id:
-            raise serializers.ValidationError("El vehículo no pertenece a la sucursal indicada.")
+    def get_vehiculo_descripcion(self, obj):
+        vehiculo = obj.vehiculo
+
+        if not vehiculo:
+            return None
+
+        return (
+            f"{vehiculo.numero} - "
+            f"{vehiculo.placa} - "
+            f"{vehiculo.marca} "
+            f"{vehiculo.modelo}"
+        )
+
+    def validate(self, attrs):
+        costo = attrs.get(
+            "costo",
+            getattr(
+                self.instance,
+                "costo",
+                Decimal("0.00"),
+            ),
+        )
+
+        if costo is not None:
+            costo = Decimal(str(costo))
+
+            if costo < Decimal("0.00"):
+                raise serializers.ValidationError({
+                    "costo": (
+                        "El costo del mantenimiento "
+                        "no puede ser negativo."
+                    )
+                })
 
         return attrs
 

@@ -97,26 +97,52 @@ logger = logging.getLogger(__name__)
 class RegistrarDispositivoNotificacionView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
-        rol_codigo = getattr(
-            getattr(
-                request.user,
-                "rol",
-                None,
-            ),
-            "codigo",
-            "",
-        )
+    ROLES_PERMITIDOS = {
+        "taxista",
+        "admin_sucursal",
+        "superadmin",
+        "super_admin",
+    }
 
-        if rol_codigo != "taxista":
+    def post(self, request):
+        usuario = request.user
+
+        codigo_rol = str(
+            getattr(
+                getattr(
+                    usuario,
+                    "rol",
+                    None,
+                ),
+                "codigo",
+                "",
+            )
+            or ""
+        ).strip().lower()
+
+        if codigo_rol not in self.ROLES_PERMITIDOS:
             return Response(
                 {
                     "detail": (
-                        "Solo los usuarios taxistas "
-                        "pueden activar estas notificaciones."
+                        "Tu usuario no tiene permiso para "
+                        "activar notificaciones."
                     )
                 },
                 status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if (
+            codigo_rol == "admin_sucursal"
+            and not usuario.sucursal_id
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "Tu usuario administrador no tiene "
+                        "una sucursal asignada."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         token = str(
@@ -139,11 +165,31 @@ class RegistrarDispositivoNotificacionView(APIView):
             .update_or_create(
                 token=token,
                 defaults={
-                    "usuario": request.user,
+                    "usuario": usuario,
                     "activo": True,
                 },
             )
         )
+
+        if codigo_rol == "taxista":
+            tipo_notificaciones = (
+                "Recordatorios de apertura y cierre "
+                "de jornada."
+            )
+
+        elif codigo_rol == "admin_sucursal":
+            tipo_notificaciones = (
+                "Alertas de mantenimiento y cambio "
+                "de aceite únicamente de los vehículos "
+                "de tu sucursal."
+            )
+
+        else:
+            tipo_notificaciones = (
+                "Alertas de mantenimiento y cambio "
+                "de aceite únicamente de los vehículos "
+                "del panel del superadministrador."
+            )
 
         return Response(
             {
@@ -151,8 +197,17 @@ class RegistrarDispositivoNotificacionView(APIView):
                     "Notificaciones activadas "
                     "correctamente."
                 ),
+                "tipo_notificaciones": (
+                    tipo_notificaciones
+                ),
                 "dispositivo_id": dispositivo.id,
                 "creado": creado,
+                "rol": codigo_rol,
+                "sucursal": (
+                    usuario.sucursal_id
+                    if usuario.sucursal_id
+                    else None
+                ),
             },
             status=(
                 status.HTTP_201_CREATED
@@ -160,7 +215,6 @@ class RegistrarDispositivoNotificacionView(APIView):
                 else status.HTTP_200_OK
             ),
         )
-
 
 class DesactivarDispositivoNotificacionView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1853,155 +1907,355 @@ class MantenimientoViewSet(viewsets.ModelViewSet):
     serializer_class = MantenimientoSerializer
 
     def get_permissions(self):
-        if self.action in ["create", "update", "partial_update", "destroy"]:
-            return [EsAdminSucursalOSuperAdmin()]
+        if self.action in [
+            "create",
+            "update",
+            "partial_update",
+            "destroy",
+        ]:
+            return [
+                EsAdminSucursalOSuperAdmin()
+            ]
+
         return [IsAuthenticated()]
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["request"] = self.request
+        return context
 
     def get_queryset(self):
         user = self.request.user
 
-        qs = Mantenimiento.objects.select_related(
-            "sucursal",
-            "vehiculo",
-            "tipo_mantenimiento",
-            "estado"
-        ).all()
+        queryset = (
+            Mantenimiento.objects
+            .select_related(
+                "sucursal",
+                "vehiculo",
+                "tipo_mantenimiento",
+                "estado",
+            )
+            .all()
+        )
 
-        fecha = self.request.query_params.get("fecha")
-        fecha_inicio = self.request.query_params.get("fecha_inicio")
-        fecha_fin = self.request.query_params.get("fecha_fin")
-        vehiculo_id = self.request.query_params.get("vehiculo")
+        fecha = self.request.query_params.get(
+            "fecha"
+        )
+
+        fecha_inicio = (
+            self.request.query_params.get(
+                "fecha_inicio"
+            )
+        )
+
+        fecha_fin = (
+            self.request.query_params.get(
+                "fecha_fin"
+            )
+        )
+
+        vehiculo_id = (
+            self.request.query_params.get(
+                "vehiculo"
+            )
+        )
+
+        sucursal_id = (
+            self.request.query_params.get(
+                "sucursal"
+            )
+        )
 
         if es_superadmin(user):
-            qs = qs.filter(sucursal__isnull=True)
+            # El superadministrador ve todos los
+            # mantenimientos, incluyendo los de sucursales.
+            if sucursal_id:
+                queryset = queryset.filter(
+                    sucursal_id=sucursal_id
+                )
 
         elif es_admin_sucursal(user):
-            qs = qs.filter(sucursal=user.sucursal)
+            if not user.sucursal_id:
+                return queryset.none()
+
+            queryset = queryset.filter(
+                sucursal_id=user.sucursal_id
+            )
 
         elif es_taxista(user):
-            return qs.none()
+            return queryset.none()
 
         else:
-            return qs.none()
+            return queryset.none()
 
         if fecha:
-            qs = qs.filter(fecha=fecha)
+            queryset = queryset.filter(
+                fecha=fecha
+            )
 
         if fecha_inicio:
-            qs = qs.filter(fecha__gte=fecha_inicio)
+            queryset = queryset.filter(
+                fecha__gte=fecha_inicio
+            )
 
         if fecha_fin:
-            qs = qs.filter(fecha__lte=fecha_fin)
+            queryset = queryset.filter(
+                fecha__lte=fecha_fin
+            )
 
         if vehiculo_id:
-            qs = qs.filter(vehiculo_id=vehiculo_id)
-
-        return qs.order_by("-fecha", "-id")
-
-    def perform_create(self, serializer):
-        user = self.request.user
-        vehiculo = serializer.validated_data.get("vehiculo")
-
-        if not vehiculo:
-            raise ValidationError("Debes indicar el vehículo.")
-
-        if es_superadmin(user):
-            if vehiculo.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes registrar mantenimiento de vehículos de una sucursal desde el panel superadmin."
-                )
-
-            mantenimiento = serializer.save(
-                sucursal=None,
-                vehiculo=vehiculo
+            queryset = queryset.filter(
+                vehiculo_id=vehiculo_id
             )
-            aplicar_mantenimiento_en_vehiculo(mantenimiento)
-            return
+
+        return queryset.order_by(
+            "-fecha",
+            "-id",
+        )
+
+    def _resolver_sucursal(
+        self,
+        *,
+        user,
+        vehiculo,
+    ):
+        if es_superadmin(user):
+            # El mantenimiento hereda la sucursal
+            # del vehículo seleccionado.
+            return vehiculo.sucursal
 
         if es_admin_sucursal(user):
-            if not user.sucursal:
-                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+            if not user.sucursal_id:
+                raise ValidationError({
+                    "sucursal": (
+                        "Tu usuario no tiene una "
+                        "sucursal asignada."
+                    )
+                })
 
-            if vehiculo.sucursal_id != user.sucursal_id:
+            if (
+                vehiculo.sucursal_id
+                != user.sucursal_id
+            ):
                 raise PermissionDenied(
-                    "No puedes registrar mantenimiento para vehículos de otra sucursal."
+                    "No puedes registrar mantenimiento "
+                    "para vehículos de otra sucursal."
                 )
 
-            mantenimiento = serializer.save(
-                sucursal=user.sucursal,
-                vehiculo=vehiculo
+            return user.sucursal
+
+        raise PermissionDenied(
+            "No tienes permiso para registrar "
+            "mantenimientos."
+        )
+
+    def _obtener_intervalo_km(
+        self,
+        *,
+        sucursal,
+        tipo_mantenimiento,
+    ):
+        configuracion = (
+            obtener_configuracion_sucursal(
+                sucursal
             )
-            aplicar_mantenimiento_en_vehiculo(mantenimiento)
-            return
+        )
 
-        raise PermissionDenied("No tienes permiso para registrar mantenimiento.")
+        codigo = str(
+            getattr(
+                tipo_mantenimiento,
+                "codigo",
+                "",
+            )
+            or ""
+        ).strip().lower()
 
+        intervalo_tipo = int(
+            getattr(
+                tipo_mantenimiento,
+                "intervalo_km",
+                0,
+            )
+            or 0
+        )
+
+        if codigo == "aceite":
+            intervalo = int(
+                configuracion
+                .intervalo_cambio_aceite_km
+                or intervalo_tipo
+                or 5000
+            )
+        else:
+            intervalo = int(
+                configuracion
+                .intervalo_mantenimiento_km
+                or intervalo_tipo
+                or 5000
+            )
+
+        if intervalo <= 0:
+            raise ValidationError({
+                "tipo_mantenimiento": (
+                    "El intervalo de mantenimiento "
+                    "debe ser mayor que cero."
+                )
+            })
+
+        return intervalo
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        user = self.request.user
+
+        vehiculo = (
+            serializer.validated_data.get(
+                "vehiculo"
+            )
+        )
+
+        tipo_mantenimiento = (
+            serializer.validated_data.get(
+                "tipo_mantenimiento"
+            )
+        )
+
+        if not vehiculo:
+            raise ValidationError({
+                "vehiculo": (
+                    "Debes seleccionar el vehículo."
+                )
+            })
+
+        if not tipo_mantenimiento:
+            raise ValidationError({
+                "tipo_mantenimiento": (
+                    "Debes seleccionar el tipo "
+                    "de mantenimiento."
+                )
+            })
+
+        sucursal = self._resolver_sucursal(
+            user=user,
+            vehiculo=vehiculo,
+        )
+
+        intervalo_km = (
+            self._obtener_intervalo_km(
+                sucursal=sucursal,
+                tipo_mantenimiento=(
+                    tipo_mantenimiento
+                ),
+            )
+        )
+
+        kilometraje_actual = int(
+            vehiculo.kilometraje_actual
+            or 0
+        )
+
+        proximo_km_sugerido = (
+            kilometraje_actual
+            + intervalo_km
+        )
+
+        mantenimiento = serializer.save(
+            sucursal=sucursal,
+            vehiculo=vehiculo,
+            kilometraje=kilometraje_actual,
+            proximo_km_sugerido=(
+                proximo_km_sugerido
+            ),
+        )
+
+        aplicar_mantenimiento_en_vehiculo(
+            mantenimiento
+        )
+
+    @transaction.atomic
     def perform_update(self, serializer):
         user = self.request.user
         instance = self.get_object()
-        vehiculo = serializer.validated_data.get("vehiculo", instance.vehiculo)
 
-        if not vehiculo:
-            raise ValidationError("Debes indicar el vehículo.")
-
-        if es_superadmin(user):
-            if instance.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes modificar mantenimiento de una sucursal desde el panel superadmin."
-                )
-
-            if vehiculo.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes mover este mantenimiento a un vehículo de sucursal."
-                )
-
-            mantenimiento = serializer.save(
-                sucursal=None,
-                vehiculo=vehiculo
+        vehiculo_enviado = (
+            serializer.validated_data.get(
+                "vehiculo",
+                instance.vehiculo,
             )
-            aplicar_mantenimiento_en_vehiculo(mantenimiento)
-            return
+        )
 
-        if es_admin_sucursal(user):
-            if not user.sucursal:
-                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
-
-            if instance.sucursal_id != user.sucursal_id:
-                raise PermissionDenied(
-                    "No puedes modificar mantenimiento de otra sucursal."
-                )
-
-            if vehiculo.sucursal_id != user.sucursal_id:
-                raise PermissionDenied(
-                    "No puedes asignar mantenimiento a vehículos de otra sucursal."
-                )
-
-            mantenimiento = serializer.save(
-                sucursal=user.sucursal,
-                vehiculo=vehiculo
+        tipo_enviado = (
+            serializer.validated_data.get(
+                "tipo_mantenimiento",
+                instance.tipo_mantenimiento,
             )
-            aplicar_mantenimiento_en_vehiculo(mantenimiento)
-            return
+        )
 
-        raise PermissionDenied("No tienes permiso para modificar mantenimiento.")
+        if (
+            vehiculo_enviado.id
+            != instance.vehiculo_id
+        ):
+            raise ValidationError({
+                "vehiculo": (
+                    "No se puede cambiar el vehículo "
+                    "de un mantenimiento ya registrado."
+                )
+            })
+
+        if (
+            tipo_enviado.id
+            != instance.tipo_mantenimiento_id
+        ):
+            raise ValidationError({
+                "tipo_mantenimiento": (
+                    "No se puede cambiar el tipo "
+                    "de un mantenimiento ya registrado."
+                )
+            })
+
+        sucursal = self._resolver_sucursal(
+            user=user,
+            vehiculo=instance.vehiculo,
+        )
+
+        serializer.save(
+            sucursal=sucursal,
+            vehiculo=instance.vehiculo,
+            tipo_mantenimiento=(
+                instance.tipo_mantenimiento
+            ),
+            kilometraje=instance.kilometraje,
+            proximo_km_sugerido=(
+                instance.proximo_km_sugerido
+            ),
+        )
 
     def perform_destroy(self, instance):
         user = self.request.user
 
-        if es_superadmin(user):
-            if instance.sucursal_id is not None:
+        if es_admin_sucursal(user):
+            if not user.sucursal_id:
+                raise ValidationError({
+                    "sucursal": (
+                        "Tu usuario no tiene una "
+                        "sucursal asignada."
+                    )
+                })
+
+            if (
+                instance.sucursal_id
+                != user.sucursal_id
+            ):
                 raise PermissionDenied(
-                    "No puedes eliminar mantenimiento de una sucursal desde el panel superadmin."
+                    "No puedes eliminar mantenimiento "
+                    "de otra sucursal."
                 )
 
-        elif es_admin_sucursal(user):
-            if instance.sucursal_id != user.sucursal_id:
-                raise PermissionDenied(
-                    "No puedes eliminar mantenimiento de otra sucursal."
-                )
-
-        else:
-            raise PermissionDenied("No tienes permiso para eliminar mantenimiento.")
+        elif not es_superadmin(user):
+            raise PermissionDenied(
+                "No tienes permiso para eliminar "
+                "mantenimientos."
+            )
 
         instance.delete()
 
