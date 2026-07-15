@@ -2660,10 +2660,13 @@ class AlertasMantenimientoView(APIView):
         conductores = Conductor.objects.select_related("sucursal").filter(activo=True)
 
         if es_superadmin(user):
-            sucursal_id = request.query_params.get("sucursal")
-            if sucursal_id:
-                vehiculos = vehiculos.filter(sucursal_id=sucursal_id)
-                conductores = conductores.filter(sucursal_id=sucursal_id)
+            vehiculos = vehiculos.filter(
+                sucursal__isnull=True
+            )
+
+            conductores = conductores.filter(
+                sucursal__isnull=True
+            )
 
         elif es_admin_sucursal(user):
             vehiculos = vehiculos.filter(sucursal=user.sucursal)

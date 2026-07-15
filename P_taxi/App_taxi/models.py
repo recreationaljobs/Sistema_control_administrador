@@ -895,3 +895,115 @@ class RegistroNotificacion(models.Model):
             f"{self.tipo} - "
             f"{self.fecha_jornada}"
         )
+    
+
+class RegistroNotificacionMantenimiento(
+    models.Model
+):
+    TIPO_ACEITE_PROXIMO = (
+        "CAMBIO_ACEITE_PROXIMO"
+    )
+
+    TIPO_ACEITE_VENCIDO = (
+        "CAMBIO_ACEITE_VENCIDO"
+    )
+
+    TIPOS = [
+        (
+            TIPO_ACEITE_PROXIMO,
+            "Cambio de aceite próximo",
+        ),
+        (
+            TIPO_ACEITE_VENCIDO,
+            "Cambio de aceite vencido",
+        ),
+    ]
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name=(
+            "registros_notificacion_"
+            "mantenimiento"
+        ),
+    )
+
+    vehiculo = models.ForeignKey(
+        Vehiculo,
+        on_delete=models.CASCADE,
+        related_name=(
+            "registros_notificacion_"
+            "mantenimiento"
+        ),
+    )
+
+    tipo = models.CharField(
+        max_length=40,
+        choices=TIPOS,
+    )
+
+    kilometraje_objetivo = (
+        models.PositiveIntegerField()
+    )
+
+    kilometraje_detectado = (
+        models.PositiveIntegerField()
+    )
+
+    titulo = models.CharField(
+        max_length=150
+    )
+
+    mensaje = models.TextField()
+
+    enviada = models.BooleanField(
+        default=False
+    )
+
+    fecha_envio = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    fecha_creacion = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    class Meta:
+        verbose_name = (
+            "Registro de notificación "
+            "de mantenimiento"
+        )
+
+        verbose_name_plural = (
+            "Registros de notificaciones "
+            "de mantenimiento"
+        )
+
+        ordering = [
+            "-fecha_creacion",
+            "-id",
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "usuario",
+                    "vehiculo",
+                    "tipo",
+                    "kilometraje_objetivo",
+                ],
+                name=(
+                    "notif_mant_unica_"
+                    "usuario_vehiculo_tipo_km"
+                ),
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.usuario.username} - "
+            f"{self.vehiculo.placa} - "
+            f"{self.tipo} - "
+            f"{self.kilometraje_objetivo} km"
+        )
