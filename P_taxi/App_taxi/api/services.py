@@ -241,13 +241,40 @@ def construir_alerta_km_aceite(vehiculo, config, tipo_aceite, fecha_creacion):
 
     ultimo = (
         Mantenimiento.objects
-        .filter(vehiculo=vehiculo, tipo_mantenimiento__codigo="aceite")
-        .order_by("-kilometraje", "-fecha", "-id")
+        .filter(
+            vehiculo=vehiculo,
+            tipo_mantenimiento__codigo="aceite",
+        )
+        .order_by(
+            "-kilometraje",
+            "-fecha",
+            "-id",
+        )
         .first()
     )
-    base = ultimo.kilometraje if ultimo else 0
 
-    km_actual = vehiculo.kilometraje_actual or 0
+    if ultimo:
+        base = int(
+            ultimo.kilometraje or 0
+        )
+    else:
+        base = int(
+            vehiculo.km_ultimo_cambio_aceite
+            or 0
+        )
+
+    # /*
+    #  * Sin un kilometraje de referencia
+    #  * no es posible calcular correctamente
+    #  * el próximo cambio de aceite.
+    #  */
+    if base <= 0:
+        return None
+
+    km_actual = int(
+        vehiculo.kilometraje_actual or 0
+    )
+
     proximo = base + intervalo
     umbral = proximo - aviso
 
