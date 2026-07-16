@@ -2,6 +2,10 @@ import logging
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
+from App_taxi.notification_services import (
+    procesar_alerta_aceite_administradores,
+    procesar_alerta_aceite_conductor,
+)
 
 from App_taxi.api.services import (
     construir_alerta_km_aceite,
@@ -118,11 +122,23 @@ class Command(BaseCommand):
             alertas_detectadas += 1
 
             try:
-                enviados = (
+                enviados_conductor = (
                     procesar_alerta_aceite_conductor(
                         vehiculo=vehiculo,
                         alerta=alerta,
                     )
+                )
+
+                enviados_administradores = (
+                    procesar_alerta_aceite_administradores(
+                        vehiculo=vehiculo,
+                        alerta=alerta,
+                    )
+                )
+
+                enviados = (
+                    enviados_conductor
+                    + enviados_administradores
                 )
 
                 dispositivos_notificados += (
