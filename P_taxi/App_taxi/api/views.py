@@ -333,18 +333,27 @@ class LoginView(APIView):
             )
 
         # Rota el token para invalidar credenciales antiguas robadas.
-        Token.objects.filter(user=user).delete()
-        token = Token.objects.create(user=user)
+        token, created = Token.objects.get_or_create(
+            user=user
+        )
 
         return Response(
             {
                 "token": token.key,
                 "user": UsuarioSerializer(user).data,
                 "rol": user.rol.codigo,
-                "sucursal": user.sucursal.id if user.sucursal else None,
-                "sucursal_nombre": user.sucursal.nombre if user.sucursal else None,
+                "sucursal": (
+                    user.sucursal.id
+                    if user.sucursal
+                    else None
+                ),
+                "sucursal_nombre": (
+                    user.sucursal.nombre
+                    if user.sucursal
+                    else None
+                ),
             },
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
 
 class LogoutView(APIView):
