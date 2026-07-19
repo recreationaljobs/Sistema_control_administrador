@@ -1190,7 +1190,8 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             "vehiculo"
         ).prefetch_related(
             "gastos",
-            "adelantos"
+            "adelantos",
+            "detalles_liquidacion",
         ).all()
 
         fecha = self.request.query_params.get("fecha")
@@ -1247,6 +1248,25 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             })
 
         return porcentaje.quantize(Decimal("0.01"))
+    
+    def _validar_jornada_no_liquidada(
+        self,
+        jornada,
+    ):
+        detalle = (
+            jornada.detalles_liquidacion
+            .only("liquidacion_id")
+            .first()
+        )
+
+        if detalle:
+            raise ValidationError({
+                "detail": (
+                    "Esta jornada ya fue incluida en la "
+                    f"liquidación #{detalle.liquidacion_id} "
+                    "y no puede modificarse."
+                )
+            })
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -1347,6 +1367,10 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
         user = self.request.user
         instance = self.get_object()
 
+        self._validar_jornada_no_liquidada(
+            instance
+        )
+
         conductor = serializer.validated_data.get("conductor", instance.conductor)
         vehiculo = serializer.validated_data.get("vehiculo", instance.vehiculo)
 
@@ -1445,6 +1469,13 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
 
         actualizar_kilometraje_vehiculo(vehiculo, jornada.kilometraje_final)
         recalcular_totales_jornada(jornada)
+
+    def perform_destroy(self, instance):
+        self._validar_jornada_no_liquidada(
+            instance
+        )
+
+        instance.delete()
     
     @action(detail=True, methods=["patch"], url_path="cerrar")
     def cerrar(self, request, pk=None):
@@ -1524,6 +1555,9 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
     def registrar_ingreso(self, request, pk=None):
         jornada = self.get_object()
         user = request.user
+        self._validar_jornada_no_liquidada(
+            jornada
+        )
 
         if not es_superadmin(user) and not es_admin_sucursal(user):
             raise PermissionDenied("Solo administración puede registrar el ingreso del día.")

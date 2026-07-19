@@ -968,6 +968,8 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
     mantenimiento_vehiculo = serializers.SerializerMethodField()
     gastos_operativos = serializers.SerializerMethodField()
     ganancia_real_dueno = serializers.SerializerMethodField()
+    liquidada = serializers.SerializerMethodField()
+    liquidacion_id = serializers.SerializerMethodField()
 
     class Meta:
         model = JornadaDiaria
@@ -1004,6 +1006,8 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "ganancia_real_dueno",
             "observaciones",
             "fecha_registro",
+            "liquidada",
+            "liquidacion_id",
             "gastos",
             "adelantos",
         ]
@@ -1031,6 +1035,8 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "gastos_operativos",
             "ganancia_real_dueno",
             "fecha_registro",
+            "liquidada",
+            "liquidacion_id",
             "gastos",
             "adelantos",
         ]
@@ -1054,9 +1060,11 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "monto_alquiler": {
                 "required": False,
             },
+
             "tipo_cobro": {
                 "required": False,
             },
+          
         }
 
     def get_conductor_nombre(self, obj):
@@ -1098,6 +1106,20 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             return Decimal("0.00")
 
         return ganancia
+    
+        
+    def get_liquidada(self, obj):
+        return obj.detalles_liquidacion.exists()
+
+    def get_liquidacion_id(self, obj):
+        return (
+            obj.detalles_liquidacion
+            .values_list(
+                "liquidacion_id",
+                flat=True,
+            )
+            .first()
+        )
 
     def validate(self, attrs):
         request = self.context.get("request")
