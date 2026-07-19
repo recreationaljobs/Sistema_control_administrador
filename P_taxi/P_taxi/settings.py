@@ -239,7 +239,7 @@ ASGI_APPLICATION = "P_taxi.asgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
-        "NAME": os.getenv("DB_NAME", "taxi_db"),
+        "NAME": os.getenv("DB_NAME", ""),
         "USER": os.getenv("DB_USER", "taxi_user"),
         "PASSWORD": os.getenv("DB_PASSWORD"),
         "HOST": os.getenv("DB_HOST", "127.0.0.1"),
@@ -258,11 +258,11 @@ DATABASES = {
 }
 
 
-if not DATABASES["default"]["PASSWORD"]:
-    raise RuntimeError(
-        "No se encontró la variable DB_PASSWORD. "
-        "Debes definirla en el archivo .env."
-    )
+# if not DATABASES["default"]["PASSWORD"]:
+#     raise RuntimeError(
+#         "No se encontró la variable DB_PASSWORD. "
+#         "Debes definirla en el archivo .env."
+#     )
 
 
 # ============================================================
