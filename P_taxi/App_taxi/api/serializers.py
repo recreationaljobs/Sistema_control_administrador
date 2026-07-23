@@ -17,6 +17,7 @@ from ..models import (
     EstadoMantenimiento,
     Conductor,
     Vehiculo,
+    DocumentoVehiculo,
     AsignacionVehiculo,
     JornadaDiaria,
     Gasto,
@@ -439,11 +440,144 @@ class ConductorSerializer(serializers.ModelSerializer):
             return attrs
 
         return attrs
+    
+class DocumentoVehiculoSerializer(serializers.ModelSerializer):
+    tipo_documento_nombre = serializers.CharField(
+        source="get_tipo_documento_display",
+        read_only=True,
+    )
+
+    vehiculo_numero = serializers.CharField(
+        source="vehiculo.numero",
+        read_only=True,
+    )
+
+    vehiculo_placa = serializers.CharField(
+        source="vehiculo.placa",
+        read_only=True,
+    )
+
+    vehiculo_descripcion = serializers.SerializerMethodField()
+
+    estado = serializers.CharField(
+        source="estado_documento",
+        read_only=True,
+    )
+
+    estado_nombre = serializers.CharField(
+        source="estado_documento_nombre",
+        read_only=True,
+    )
+
+    dias_para_vencer = serializers.IntegerField(
+        read_only=True,
+        allow_null=True,
+    )
+
+    class Meta:
+        model = DocumentoVehiculo
+
+        fields = [
+            "id",
+            "vehiculo",
+            "vehiculo_numero",
+            "vehiculo_placa",
+            "vehiculo_descripcion",
+            "tipo_documento",
+            "tipo_documento_nombre",
+            "fecha_inicio",
+            "fecha_vencimiento",
+            "observaciones",
+            "estado",
+            "estado_nombre",
+            "dias_para_vencer",
+            "fecha_registro",
+            "fecha_actualizacion",
+        ]
+
+        read_only_fields = [
+            "id",
+            "vehiculo_numero",
+            "vehiculo_placa",
+            "vehiculo_descripcion",
+            "tipo_documento_nombre",
+            "estado",
+            "estado_nombre",
+            "dias_para_vencer",
+            "fecha_registro",
+            "fecha_actualizacion",
+        ]
+
+        extra_kwargs = {
+            "vehiculo": {
+                "required": True,
+                "allow_null": False,
+            },
+            "tipo_documento": {
+                "required": True,
+                "allow_blank": False,
+            },
+            "fecha_inicio": {
+                "required": True,
+                "allow_null": False,
+            },
+            "fecha_vencimiento": {
+                "required": True,
+                "allow_null": False,
+            },
+            "observaciones": {
+                "required": False,
+                "allow_blank": True,
+                "allow_null": True,
+            },
+        }
+
+    def get_vehiculo_descripcion(self, obj):
+        return (
+            f"{obj.vehiculo.numero} - "
+            f"{obj.vehiculo.placa} - "
+            f"{obj.vehiculo.marca} "
+            f"{obj.vehiculo.modelo}"
+        )
+
+    def validate(self, attrs):
+        fecha_inicio = attrs.get(
+            "fecha_inicio",
+            getattr(
+                self.instance,
+                "fecha_inicio",
+                None,
+            ),
+        )
+
+        fecha_vencimiento = attrs.get(
+            "fecha_vencimiento",
+            getattr(
+                self.instance,
+                "fecha_vencimiento",
+                None,
+            ),
+        )
+
+        if (
+            fecha_inicio
+            and fecha_vencimiento
+            and fecha_vencimiento < fecha_inicio
+        ):
+            raise serializers.ValidationError({
+                "fecha_vencimiento": (
+                    "La fecha de vencimiento no puede ser "
+                    "anterior a la fecha de inicio."
+                )
+            })
+
+        return attrs
 
 class VehiculoSerializer(serializers.ModelSerializer):
     sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
     estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
     estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
+    estado_documental = serializers.SerializerMethodField()
 
     proximo_cambio_aceite = serializers.SerializerMethodField()
     proximo_mantenimiento = serializers.SerializerMethodField()
@@ -463,6 +597,7 @@ class VehiculoSerializer(serializers.ModelSerializer):
             "estado",
             "estado_nombre",
             "estado_codigo",
+            "estado_documental",
             "numero",
             "placa",
             "marca",
@@ -494,6 +629,7 @@ class VehiculoSerializer(serializers.ModelSerializer):
             "sucursal_nombre",
             "estado_nombre",
             "estado_codigo",
+            "estado_documental",
             "fecha_registro",
             "proximo_cambio_aceite",
             "proximo_mantenimiento",
@@ -588,6 +724,7 @@ class VehiculoSerializer(serializers.ModelSerializer):
                     qs_placa = qs_placa.exclude(pk=self.instance.pk)
 
                 if qs_placa.exists():
+
                     raise serializers.ValidationError({
                         "placa": "Ya existe un vehículo registrado con esta placa."
                     })
@@ -596,6 +733,94 @@ class VehiculoSerializer(serializers.ModelSerializer):
 
         return attrs
 
+    def get_estado_documental(self, obj):
+        tipos = [
+            (
+                DocumentoVehiculo.TIPO_INSPECCION_MECANICA,
+                "Inspección mecánica",
+            ),
+            (
+                DocumentoVehiculo.TIPO_EMISION_GASES,
+                "Emisión de gases",
+            ),
+            (
+                DocumentoVehiculo.TIPO_SEGURO_VEHICULAR,
+                "Seguro vehicular",
+            ),
+            (
+                DocumentoVehiculo.TIPO_SEGURO_PASAJERO,
+                "Seguro de pasajero",
+            ),
+        ]
+
+        documentos = getattr(
+            obj,
+            "documentos_prefetch",
+            None,
+        )
+
+        if documentos is None:
+            documentos = list(
+                obj.documentos.all().order_by(
+                    "tipo_documento",
+                    "-fecha_vencimiento",
+                    "-id",
+                )
+            )
+
+        documentos_actuales = {}
+
+        for documento in documentos:
+            if (
+                documento.tipo_documento
+                not in documentos_actuales
+            ):
+                documentos_actuales[
+                    documento.tipo_documento
+                ] = documento
+
+        resultado = {}
+
+        for codigo, nombre in tipos:
+            documento = documentos_actuales.get(
+                codigo
+            )
+
+            if documento:
+                resultado[codigo] = {
+                    "id": documento.id,
+                    "tipo_documento": codigo,
+                    "nombre": nombre,
+                    "fecha_inicio": (
+                        documento.fecha_inicio
+                    ),
+                    "fecha_vencimiento": (
+                        documento.fecha_vencimiento
+                    ),
+                    "estado": (
+                        documento.estado_documento
+                    ),
+                    "estado_nombre": (
+                        documento.estado_documento_nombre
+                    ),
+                    "dias_para_vencer": (
+                        documento.dias_para_vencer
+                    ),
+                }
+            else:
+                resultado[codigo] = {
+                    "id": None,
+                    "tipo_documento": codigo,
+                    "nombre": nombre,
+                    "fecha_inicio": None,
+                    "fecha_vencimiento": None,
+                    "estado": "sin_registrar",
+                    "estado_nombre": "Sin registrar",
+                    "dias_para_vencer": None,
+                }
+
+        return resultado
+    
     def get_proximo_cambio_aceite(self, obj):
         return obj.km_ultimo_cambio_aceite + obj.km_intervalo_cambio_aceite
 
@@ -694,16 +919,27 @@ class AsignacionVehiculoSerializer(serializers.ModelSerializer):
 
         codigo_rol = user.rol.codigo
 
-        if codigo_rol == "superadmin":
-            # El superadmin puede asignar en cualquier sucursal, pero el
-            # conductor y el vehículo deben ser de la misma (ambos globales o
-            # ambos de la misma sucursal). La asignación hereda esa sucursal.
-            if conductor.sucursal_id != vehiculo.sucursal_id:
+        if codigo_rol in [
+            "superadmin",
+            "super_admin",
+        ]:
+            if conductor.sucursal_id is not None:
                 raise serializers.ValidationError({
-                    "vehiculo": "El conductor y el vehículo deben pertenecer a la misma sucursal."
+                    "conductor": (
+                        "Desde el panel del superadministrador "
+                        "solo puedes usar conductores sin sucursal."
+                    )
                 })
 
-            attrs["sucursal"] = conductor.sucursal
+            if vehiculo.sucursal_id is not None:
+                raise serializers.ValidationError({
+                    "vehiculo": (
+                        "Desde el panel del superadministrador "
+                        "solo puedes usar vehículos sin sucursal."
+                    )
+                })
+
+            attrs["sucursal"] = None
 
         elif codigo_rol == "admin_sucursal":
             if not user.sucursal:

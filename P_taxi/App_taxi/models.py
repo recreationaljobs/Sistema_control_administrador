@@ -1007,3 +1007,143 @@ class RegistroNotificacionMantenimiento(
             f"{self.tipo} - "
             f"{self.kilometraje_objetivo} km"
         )
+    
+class DocumentoVehiculo(models.Model):
+    TIPO_INSPECCION_MECANICA = "inspeccion_mecanica"
+    TIPO_EMISION_GASES = "emision_gases"
+    TIPO_SEGURO_VEHICULAR = "seguro_vehicular"
+    TIPO_SEGURO_PASAJERO = "seguro_pasajero"
+
+    TIPO_DOCUMENTO_CHOICES = [
+        (
+            TIPO_INSPECCION_MECANICA,
+            "Inspección mecánica",
+        ),
+        (
+            TIPO_EMISION_GASES,
+            "Emisión de gases",
+        ),
+        (
+            TIPO_SEGURO_VEHICULAR,
+            "Seguro vehicular",
+        ),
+        (
+            TIPO_SEGURO_PASAJERO,
+            "Seguro de pasajero",
+        ),
+    ]
+
+    vehiculo = models.ForeignKey(
+        Vehiculo,
+        on_delete=models.CASCADE,
+        related_name="documentos",
+    )
+
+    tipo_documento = models.CharField(
+        max_length=40,
+        choices=TIPO_DOCUMENTO_CHOICES,
+    )
+
+    fecha_inicio = models.DateField()
+
+    fecha_vencimiento = models.DateField()
+
+    observaciones = models.TextField(
+        blank=True,
+        null=True,
+    )
+
+    fecha_registro = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        verbose_name = "Documento de vehículo"
+        verbose_name_plural = "Documentos de vehículos"
+
+        ordering = [
+            "-fecha_vencimiento",
+            "-id",
+        ]
+
+        indexes = [
+            models.Index(
+                fields=[
+                    "vehiculo",
+                    "tipo_documento",
+                ],
+                name="doc_veh_tipo_idx",
+            ),
+            models.Index(
+                fields=[
+                    "fecha_vencimiento",
+                ],
+                name="doc_fecha_venc_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        if (
+            self.fecha_inicio
+            and self.fecha_vencimiento
+            and self.fecha_vencimiento < self.fecha_inicio
+        ):
+            raise ValidationError({
+                "fecha_vencimiento": (
+                    "La fecha de vencimiento no puede ser "
+                    "anterior a la fecha de inicio."
+                )
+            })
+
+    @property
+    def dias_para_vencer(self):
+        if not self.fecha_vencimiento:
+            return None
+
+        hoy = timezone.localdate()
+
+        return (
+            self.fecha_vencimiento - hoy
+        ).days
+
+    @property
+    def estado_documento(self):
+        dias = self.dias_para_vencer
+
+        if dias is None:
+            return "sin_registrar"
+
+        if dias < 0:
+            return "vencido"
+
+        if dias <= 30:
+            return "por_vencer"
+
+        return "vigente"
+
+    @property
+    def estado_documento_nombre(self):
+        estados = {
+            "vigente": "Vigente",
+            "por_vencer": "Por vencer",
+            "vencido": "Vencido",
+            "sin_registrar": "Sin registrar",
+        }
+
+        return estados.get(
+            self.estado_documento,
+            "Sin registrar",
+        )
+
+    def __str__(self):
+        return (
+            f"{self.get_tipo_documento_display()} - "
+            f"{self.vehiculo.numero} - "
+            f"{self.vehiculo.placa}"
+        )

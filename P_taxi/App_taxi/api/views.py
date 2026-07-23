@@ -3,7 +3,7 @@ import logging
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Q, Sum
+from django.db.models import Prefetch, Q, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
@@ -36,6 +36,7 @@ from ..models import (
     EstadoMantenimiento,
     Conductor,
     Vehiculo,
+    DocumentoVehiculo,
     AsignacionVehiculo,
     JornadaDiaria,
     Gasto,
@@ -59,6 +60,7 @@ from .serializers import (
     EstadoMantenimientoSerializer,
     ConductorSerializer,
     VehiculoSerializer,
+    DocumentoVehiculoSerializer,
     AsignacionVehiculoSerializer,
     JornadaDiariaSerializer,
     GastoSerializer,
@@ -729,21 +731,33 @@ class ConductorViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        qs = Conductor.objects.select_related(
-            "sucursal",
-            "usuario"
-        ).all().order_by("-id")
+        qs = (
+            Conductor.objects
+            .select_related(
+                "sucursal",
+                "usuario",
+            )
+            .all()
+            .order_by("-id")
+        )
 
         if es_superadmin(user):
-            return qs
+            return qs.filter(
+                sucursal__isnull=True
+            )
 
         if es_admin_sucursal(user):
-            if not user.sucursal:
+            if not user.sucursal_id:
                 return qs.none()
-            return qs.filter(sucursal=user.sucursal)
+
+            return qs.filter(
+                sucursal_id=user.sucursal_id
+            )
 
         if es_taxista(user):
-            return qs.filter(usuario=user)
+            return qs.filter(
+                usuario=user
+            )
 
         return qs.none()
 
@@ -921,26 +935,56 @@ class VehiculoViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        qs = Vehiculo.objects.select_related(
-            "sucursal",
-            "estado"
-        ).all().order_by("placa")
+        documentos_queryset = (
+            DocumentoVehiculo.objects
+            .select_related(
+                "vehiculo"
+            )
+            .order_by(
+                "tipo_documento",
+                "-fecha_vencimiento",
+                "-id",
+            )
+        )
 
-        # El superadmin gestiona todas las sucursales: ve todos los vehículos
-        # (globales y de sucursal), igual que los conductores.
+        qs = (
+            Vehiculo.objects
+            .select_related(
+                "sucursal",
+                "estado",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "documentos",
+                    queryset=documentos_queryset,
+                    to_attr="documentos_prefetch",
+                )
+            )
+            .all()
+            .order_by("placa")
+        )
+
         if es_superadmin(user):
-            return qs
+            return qs.filter(
+                sucursal__isnull=True
+            )
 
         if es_admin_sucursal(user):
-            if not user.sucursal:
+            if not user.sucursal_id:
                 return qs.none()
-            return qs.filter(sucursal=user.sucursal)
+
+            return qs.filter(
+                sucursal_id=user.sucursal_id
+            )
 
         if es_taxista(user):
-            return qs.filter(
-                asignaciones__conductor__usuario=user,
-                asignaciones__activa=True
-            ).distinct()
+            return (
+                qs.filter(
+                    asignaciones__conductor__usuario=user,
+                    asignaciones__activa=True,
+                )
+                .distinct()
+            )
 
         return qs.none()
 
@@ -998,6 +1042,277 @@ class VehiculoViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(qs.distinct(), many=True)
         return Response(serializer.data)
 
+class DocumentoVehiculoViewSet(
+    viewsets.ModelViewSet
+):
+    serializer_class = DocumentoVehiculoSerializer
+
+    def get_permissions(self):
+        if self.action in [
+            "create",
+            "update",
+            "partial_update",
+            "destroy",
+        ]:
+            return [
+                EsAdminSucursalOSuperAdmin()
+            ]
+
+        return [IsAuthenticated()]
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["request"] = self.request
+        return context
+
+    def get_queryset(self):
+        user = self.request.user
+
+        qs = (
+            DocumentoVehiculo.objects
+            .select_related(
+                "vehiculo",
+                "vehiculo__sucursal",
+                "vehiculo__estado",
+            )
+            .all()
+        )
+
+        if es_superadmin(user):
+            qs = qs.filter(
+                vehiculo__sucursal__isnull=True
+            )
+
+        elif es_admin_sucursal(user):
+            if not user.sucursal_id:
+                return qs.none()
+
+            qs = qs.filter(
+                vehiculo__sucursal_id=(
+                    user.sucursal_id
+                )
+            )
+
+        elif es_taxista(user):
+            qs = qs.filter(
+                vehiculo__asignaciones__conductor__usuario=user,
+                vehiculo__asignaciones__activa=True,
+            )
+
+        else:
+            return qs.none()
+
+        vehiculo_id = (
+            self.request.query_params
+            .get("vehiculo")
+        )
+
+        tipo_documento = (
+            self.request.query_params
+            .get("tipo_documento")
+        )
+
+        estado = (
+            self.request.query_params
+            .get("estado")
+        )
+
+        if vehiculo_id:
+            qs = qs.filter(
+                vehiculo_id=vehiculo_id
+            )
+
+        if tipo_documento:
+            tipos_validos = {
+                codigo
+                for codigo, _nombre
+                in (
+                    DocumentoVehiculo
+                    .TIPO_DOCUMENTO_CHOICES
+                )
+            }
+
+            if (
+                tipo_documento
+                not in tipos_validos
+            ):
+                raise ValidationError({
+                    "tipo_documento": (
+                        "El tipo de documento "
+                        "seleccionado no es válido."
+                    )
+                })
+
+            qs = qs.filter(
+                tipo_documento=tipo_documento
+            )
+
+        qs = (
+            qs.distinct()
+            .order_by(
+                "tipo_documento",
+                "-fecha_vencimiento",
+                "-id",
+            )
+        )
+
+        if estado:
+            estados_validos = {
+                "vigente",
+                "por_vencer",
+                "vencido",
+            }
+
+            if estado not in estados_validos:
+                raise ValidationError({
+                    "estado": (
+                        "El estado seleccionado "
+                        "no es válido."
+                    )
+                })
+
+            ids = [
+                documento.id
+                for documento in qs
+                if (
+                    documento.estado_documento
+                    == estado
+                )
+            ]
+
+            qs = (
+                DocumentoVehiculo.objects
+                .select_related(
+                    "vehiculo",
+                    "vehiculo__sucursal",
+                    "vehiculo__estado",
+                )
+                .filter(
+                    id__in=ids
+                )
+                .order_by(
+                    "tipo_documento",
+                    "-fecha_vencimiento",
+                    "-id",
+                )
+            )
+
+        return qs
+
+    def _validar_vehiculo(
+        self,
+        vehiculo,
+    ):
+        user = self.request.user
+
+        if not vehiculo:
+            raise ValidationError({
+                "vehiculo": (
+                    "Debes seleccionar un vehículo."
+                )
+            })
+
+        if es_superadmin(user):
+            if vehiculo.sucursal_id is not None:
+                raise PermissionDenied(
+                    "Desde el panel del superadministrador "
+                    "solo puedes administrar documentos "
+                    "de vehículos sin sucursal."
+                )
+
+            return
+
+        if es_admin_sucursal(user):
+            if not user.sucursal_id:
+                raise ValidationError({
+                    "sucursal": (
+                        "Tu usuario no tiene una "
+                        "sucursal asignada."
+                    )
+                })
+
+            if (
+                vehiculo.sucursal_id
+                != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes administrar documentos "
+                    "de vehículos de otra sucursal."
+                )
+
+            return
+
+        raise PermissionDenied(
+            "No tienes permiso para administrar "
+            "documentos de vehículos."
+        )
+
+    def _guardar_validado(
+        self,
+        serializer,
+    ):
+        vehiculo = serializer.validated_data.get(
+            "vehiculo",
+            getattr(
+                serializer.instance,
+                "vehiculo",
+                None,
+            ),
+        )
+
+        self._validar_vehiculo(
+            vehiculo
+        )
+
+        instance = (
+            serializer.instance
+            or DocumentoVehiculo()
+        )
+
+        for attr, value in (
+            serializer.validated_data.items()
+        ):
+            setattr(
+                instance,
+                attr,
+                value,
+            )
+
+        try:
+            instance.full_clean()
+        except DjangoValidationError as exc:
+            if hasattr(
+                exc,
+                "message_dict",
+            ):
+                raise ValidationError(
+                    exc.message_dict
+                )
+
+            raise ValidationError(
+                exc.messages
+            )
+
+        serializer.save(
+            vehiculo=vehiculo
+        )
+
+    def perform_create(
+        self,
+        serializer,
+    ):
+        self._guardar_validado(
+            serializer
+        )
+
+    def perform_update(
+        self,
+        serializer,
+    ):
+        self._guardar_validado(
+            serializer
+        )
+
 
 class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
     serializer_class = AsignacionVehiculoSerializer
@@ -1016,26 +1331,42 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        qs = AsignacionVehiculo.objects.select_related(
-            "sucursal",
-            "conductor",
-            "vehiculo"
-        ).all().order_by("-fecha_inicio")
+        qs = (
+            AsignacionVehiculo.objects
+            .select_related(
+                "sucursal",
+                "conductor",
+                "conductor__sucursal",
+                "conductor__usuario",
+                "vehiculo",
+                "vehiculo__sucursal",
+            )
+            .all()
+            .order_by(
+                "-fecha_inicio",
+                "-id",
+            )
+        )
 
-        # El superadmin ve todas las asignaciones (de todas las sucursales).
         if es_superadmin(user):
-            return qs
+            return qs.filter(
+                sucursal__isnull=True
+            )
 
         if es_admin_sucursal(user):
-            if not user.sucursal:
+            if not user.sucursal_id:
                 return qs.none()
-            return qs.filter(sucursal=user.sucursal)
+
+            return qs.filter(
+                sucursal_id=user.sucursal_id
+            )
 
         if es_taxista(user):
-            return qs.filter(conductor__usuario=user)
+            return qs.filter(
+                conductor__usuario=user
+            )
 
         return qs.none()
-
     def _guardar_validado(self, serializer, sucursal):
         # Construye la instancia con los datos entrantes y corre full_clean()
         # (que dispara Asignacion.clean) ANTES de guardar. Traduce el error de
@@ -1058,16 +1389,23 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
         vehiculo = serializer.validated_data.get("vehiculo")
 
         if es_superadmin(user):
-            # El superadmin puede asignar en cualquier sucursal, pero el
-            # conductor y el vehículo deben pertenecer a la misma (ambos
-            # globales o ambos de la misma sucursal). La asignación hereda esa
-            # sucursal.
-            if conductor.sucursal_id != vehiculo.sucursal_id:
+            if conductor.sucursal_id is not None:
                 raise PermissionDenied(
-                    "El conductor y el vehículo deben pertenecer a la misma sucursal."
+                    "Desde el panel del superadministrador "
+                    "solo puedes asignar conductores sin sucursal."
                 )
 
-            self._guardar_validado(serializer, conductor.sucursal)
+            if vehiculo.sucursal_id is not None:
+                raise PermissionDenied(
+                    "Desde el panel del superadministrador "
+                    "solo puedes asignar vehículos sin sucursal."
+                )
+
+            self._guardar_validado(
+                serializer,
+                None
+            )
+
             return
 
         if es_admin_sucursal(user):

@@ -17,6 +17,7 @@ from .views import (
     EstadoMantenimientoViewSet,
     ConductorViewSet,
     VehiculoViewSet,
+    DocumentoVehiculoViewSet,
     AsignacionVehiculoViewSet,
     JornadaDiariaViewSet,
     GastoViewSet,
@@ -50,6 +51,7 @@ router.register(r"estados-mantenimiento", EstadoMantenimientoViewSet, basename="
 
 router.register(r"conductores", ConductorViewSet, basename="conductores")
 router.register(r"vehiculos", VehiculoViewSet, basename="vehiculos")
+router.register(r"documentos-vehiculo",DocumentoVehiculoViewSet,basename="documentos-vehiculo")
 router.register(r"asignaciones", AsignacionVehiculoViewSet, basename="asignaciones")
 router.register(r"jornadas", JornadaDiariaViewSet, basename="jornadas")
 router.register(r"gastos", GastoViewSet, basename="gastos")
