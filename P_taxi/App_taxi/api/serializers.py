@@ -26,6 +26,10 @@ from ..models import (
     ConfiguracionSistema,
 )
 
+from .services import (
+    obtener_estado_mantenimiento_vehiculo,
+)
+
 
 class SucursalSerializer(serializers.ModelSerializer):
     class Meta:
@@ -587,6 +591,8 @@ class VehiculoSerializer(serializers.ModelSerializer):
     necesita_mantenimiento = serializers.SerializerMethodField()
     alerta_cambio_aceite = serializers.SerializerMethodField()
     alerta_mantenimiento = serializers.SerializerMethodField()
+    estado_mantenimiento_calculado = serializers.SerializerMethodField()
+    sin_historial_mantenimiento = serializers.SerializerMethodField()
 
     class Meta:
         model = Vehiculo
@@ -622,6 +628,8 @@ class VehiculoSerializer(serializers.ModelSerializer):
             "necesita_mantenimiento",
             "alerta_cambio_aceite",
             "alerta_mantenimiento",
+            "estado_mantenimiento_calculado",
+            "sin_historial_mantenimiento",
         ]
 
         read_only_fields = [
@@ -639,6 +647,8 @@ class VehiculoSerializer(serializers.ModelSerializer):
             "necesita_mantenimiento",
             "alerta_cambio_aceite",
             "alerta_mantenimiento",
+            "estado_mantenimiento_calculado",
+            "sin_historial_mantenimiento",
         ]
 
         extra_kwargs = {
@@ -821,32 +831,145 @@ class VehiculoSerializer(serializers.ModelSerializer):
 
         return resultado
     
-    def get_proximo_cambio_aceite(self, obj):
-        return obj.km_ultimo_cambio_aceite + obj.km_intervalo_cambio_aceite
+    def _obtener_estado_mantenimiento(
+        self,
+        obj,
+    ):
+        cache = getattr(
+            obj,
+            "_estado_mantenimiento_serializado",
+            None,
+        )
 
-    def get_proximo_mantenimiento(self, obj):
-        return obj.km_ultimo_mantenimiento + obj.km_intervalo_mantenimiento
+        if cache is not None:
+            return cache
 
-    def get_faltan_km_cambio_aceite(self, obj):
-        return self.get_proximo_cambio_aceite(obj) - obj.kilometraje_actual
+        cache = (
+            obtener_estado_mantenimiento_vehiculo(
+                obj
+            )
+        )
 
-    def get_faltan_km_mantenimiento(self, obj):
-        return self.get_proximo_mantenimiento(obj) - obj.kilometraje_actual
+        setattr(
+            obj,
+            "_estado_mantenimiento_serializado",
+            cache,
+        )
 
-    def get_necesita_cambio_aceite(self, obj):
-        return obj.kilometraje_actual >= self.get_proximo_cambio_aceite(obj)
+        return cache
 
-    def get_necesita_mantenimiento(self, obj):
-        return obj.kilometraje_actual >= self.get_proximo_mantenimiento(obj)
+    def get_proximo_cambio_aceite(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["aceite"]
+            ["proximo_km"]
+        )
 
-    def get_alerta_cambio_aceite(self, obj):
-        faltan = self.get_faltan_km_cambio_aceite(obj)
-        return 0 <= faltan <= obj.alerta_previa_km
+    def get_proximo_mantenimiento(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["mantenimiento"]
+            ["proximo_km"]
+        )
 
-    def get_alerta_mantenimiento(self, obj):
-        faltan = self.get_faltan_km_mantenimiento(obj)
-        return 0 <= faltan <= obj.alerta_previa_km
+    def get_faltan_km_cambio_aceite(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["aceite"]
+            ["faltan_km"]
+        )
 
+    def get_faltan_km_mantenimiento(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["mantenimiento"]
+            ["faltan_km"]
+        )
+
+    def get_necesita_cambio_aceite(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["aceite"]
+            ["estado"]
+            == "vencido"
+        )
+
+    def get_necesita_mantenimiento(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["mantenimiento"]
+            ["estado"]
+            == "vencido"
+        )
+
+    def get_alerta_cambio_aceite(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["aceite"]
+            ["estado"]
+            == "proximo"
+        )
+
+    def get_alerta_mantenimiento(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["mantenimiento"]
+            ["estado"]
+            == "proximo"
+        )
+
+    def get_estado_mantenimiento_calculado(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["estado_general"]
+        )
+
+    def get_sin_historial_mantenimiento(
+        self,
+        obj,
+    ):
+        return (
+            self
+            ._obtener_estado_mantenimiento(obj)
+            ["estado_general"]
+            == "sin_historial"
+        )
 
 class AsignacionVehiculoSerializer(serializers.ModelSerializer):
     sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
