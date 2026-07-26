@@ -20,9 +20,36 @@ from .models import (
     Adelanto,
     Mantenimiento,
     ConfiguracionSistema,
+    Liquidacion,
+    DocumentoVehiculo,
+   
+
 )
+@admin.register(Liquidacion)
+class LiquidacionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "conductor",
+        "fecha",
+        "jornadas_count",
+        "total_jornadas",
+        "total_pago",
+    )
 
+    search_fields = (
+        "conductor__nombre",
+        "conductor__apellido",
+        "conductor__cedula",
+    )
 
+    list_filter = (
+        "fecha",
+    )
+
+    ordering = (
+        "-fecha",
+        "-id",
+    )
 @admin.register(Usuario)
 class UsuarioAdmin(UserAdmin):
     list_display = ("id", "username", "email", "rol", "sucursal", "is_active", "is_staff")
