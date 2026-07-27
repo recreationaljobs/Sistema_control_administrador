@@ -3329,11 +3329,14 @@ def _obtener_jornadas_pendientes_liquidacion(user, conductor):
         "conductor",
         "vehiculo",
         "sucursal"
-    ).filter(
+        .filter(
         conductor=conductor,
         kilometraje_final__isnull=False,
-        pago_pendiente_conductor__gt=Decimal("0.00")
-    ).order_by("fecha", "id")
+        pago_pendiente_conductor__gt=Decimal("0.00"),
+        detalles_liquidacion__isnull=True,
+        )
+        .distinct()
+    )
 
     if es_superadmin(user):
         if conductor.sucursal_id is None:
