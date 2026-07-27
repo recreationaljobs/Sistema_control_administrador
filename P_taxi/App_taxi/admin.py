@@ -96,6 +96,45 @@ class LiquidacionAdmin(admin.ModelAdmin):
         "total_adelantos_pendientes",
         "total_pago",
     )
+
+    def save_model(
+        self,
+        request,
+        obj,
+        form,
+        change,
+    ):
+        super().save_model(
+            request,
+            obj,
+            form,
+            change,
+        )
+
+        if not form.cleaned_data.get(
+            "liquidar"
+        ):
+            return
+
+        resultado = (
+            procesar_liquidacion_manual(
+                liquidacion=obj,
+                usuario=request.user,
+            )
+        )
+
+        nivel = (
+            messages.SUCCESS
+            if resultado["procesada"]
+            else messages.WARNING
+        )
+
+        self.message_user(
+            request,
+            resultado["mensaje"],
+            level=nivel,
+        )
+
 @admin.register(Usuario)
 class UsuarioAdmin(UserAdmin):
     list_display = ("id", "username", "email", "rol", "sucursal", "is_active", "is_staff")
