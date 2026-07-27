@@ -1,3 +1,4 @@
+from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
@@ -21,16 +22,52 @@ from .models import (
     Mantenimiento,
     ConfiguracionSistema,
     Liquidacion,
-    DocumentoVehiculo,
+  
    
 
+
+
 )
+
+class LiquidacionAdminForm(forms.ModelForm):
+    liquidar = forms.BooleanField(
+        required=False,
+        label="Liquidar",
+        help_text=(
+            "Marca esta casilla para liquidar las jornadas "
+            "del conductor dentro del rango seleccionado."
+        ),
+    )
+
+    class Meta:
+        model = Liquidacion
+        fields = (
+            "sucursal",
+            "conductor",
+            "usuario",
+            "fecha",
+            "fecha_inicio",
+            "fecha_fin",
+            "jornadas_count",
+            "total_jornadas",
+            "total_adelantos_pendientes",
+            "abono_aplicado",
+            "ajuste_manual",
+            "total_pago",
+            "notas",
+        )
+
+
 @admin.register(Liquidacion)
 class LiquidacionAdmin(admin.ModelAdmin):
+    form = LiquidacionAdminForm
+
     list_display = (
         "id",
         "conductor",
         "fecha",
+        "fecha_inicio",
+        "fecha_fin",
         "jornadas_count",
         "total_jornadas",
         "total_pago",
@@ -44,11 +81,20 @@ class LiquidacionAdmin(admin.ModelAdmin):
 
     list_filter = (
         "fecha",
+        "fecha_inicio",
+        "fecha_fin",
     )
 
     ordering = (
         "-fecha",
         "-id",
+    )
+
+    readonly_fields = (
+        "jornadas_count",
+        "total_jornadas",
+        "total_adelantos_pendientes",
+        "total_pago",
     )
 @admin.register(Usuario)
 class UsuarioAdmin(UserAdmin):
