@@ -3324,37 +3324,52 @@ def _serializar_liquidacion(liquidacion):
     }
 
 
-def _obtener_jornadas_pendientes_liquidacion(user, conductor):
-    jornadas = JornadaDiaria.objects.select_related(
-        "conductor",
-        "vehiculo",
-        "sucursal"
+def _obtener_jornadas_pendientes_liquidacion(
+    user,
+    conductor,
+):
+    jornadas = (
+        JornadaDiaria.objects
+        .select_related(
+            "conductor",
+            "vehiculo",
+            "sucursal",
+        )
         .filter(
-        conductor=conductor,
-        kilometraje_final__isnull=False,
-        pago_pendiente_conductor__gt=Decimal("0.00"),
-        detalles_liquidacion__isnull=True,
+            conductor=conductor,
+            kilometraje_final__isnull=False,
+            pago_pendiente_conductor__gt=Decimal("0.00"),
+            detalles_liquidacion__isnull=True,
         )
         .distinct()
     )
 
     if es_superadmin(user):
         if conductor.sucursal_id is None:
-            jornadas = jornadas.filter(sucursal__isnull=True)
+            jornadas = jornadas.filter(
+                sucursal__isnull=True
+            )
         else:
-            jornadas = jornadas.filter(sucursal=conductor.sucursal)
+            jornadas = jornadas.filter(
+                sucursal=conductor.sucursal
+            )
 
     elif es_admin_sucursal(user):
-        jornadas = jornadas.filter(sucursal=user.sucursal)
+        jornadas = jornadas.filter(
+            sucursal=user.sucursal
+        )
 
     elif es_taxista(user):
-        jornadas = jornadas.filter(conductor__usuario=user)
+        jornadas = jornadas.filter(
+            conductor__usuario=user
+        )
 
     else:
-        jornadas = JornadaDiaria.objects.none()
+        jornadas = (
+            JornadaDiaria.objects.none()
+        )
 
     return jornadas
-
 
 def _calcular_preview_liquidacion(user, conductor):
     jornadas = _obtener_jornadas_pendientes_liquidacion(user, conductor)
