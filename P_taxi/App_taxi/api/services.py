@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
@@ -13,8 +14,10 @@ from ..models import (
     Adelanto,
     Vehiculo,
     Mantenimiento,
+    EstadoAdelanto,
+    Liquidacion,
+    DetalleLiquidacion,
 )
-
 
 def obtener_configuracion_sucursal(sucursal):
     config, _ = ConfiguracionSistema.objects.get_or_create(sucursal=sucursal)
@@ -804,3 +807,327 @@ def sumar_decimal(queryset, campo):
 
 def sumar_entero(queryset, campo):
     return queryset.aggregate(total=Sum(campo))["total"] or 0
+
+@transaction.atomic
+def procesar_liquidacion_manual(
+    *,
+    liquidacion,
+    usuario,
+):
+    """
+    Procesa desde Django Admin una liquidación ya creada.
+
+    Las jornadas que ya tienen un DetalleLiquidacion
+    no vuelven a calcularse.
+    """
+
+    liquidacion = (
+        Liquidacion.objects
+        .select_for_update()
+        .select_related(
+            "conductor",
+            "sucursal",
+        )
+        .get(pk=liquidacion.pk)
+    )
+
+    if liquidacion.detalles.exists():
+        return {
+            "procesada": False,
+            "mensaje": (
+                "Esta liquidación ya fue procesada. "
+                "No se calcularon nuevamente sus jornadas."
+            ),
+        }
+
+    conductor = liquidacion.conductor
+    fecha_inicio = liquidacion.fecha_inicio
+    fecha_fin = liquidacion.fecha_fin
+
+    if not conductor:
+        return {
+            "procesada": False,
+            "mensaje": "Debes seleccionar un conductor.",
+        }
+
+    if not fecha_inicio or not fecha_fin:
+        return {
+            "procesada": False,
+            "mensaje": (
+                "Debes indicar la fecha de inicio "
+                "y la fecha final."
+            ),
+        }
+
+    if fecha_inicio > fecha_fin:
+        return {
+            "procesada": False,
+            "mensaje": (
+                "La fecha de inicio no puede ser "
+                "posterior a la fecha final."
+            ),
+        }
+
+    misma_fecha_ya_liquidada = (
+        Liquidacion.objects
+        .filter(
+            conductor=conductor,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+            detalles__isnull=False,
+        )
+        .exclude(pk=liquidacion.pk)
+        .exists()
+    )
+
+    if misma_fecha_ya_liquidada:
+        return {
+            "procesada": False,
+            "mensaje": (
+                "Este conductor ya tiene una liquidación "
+                "procesada para el mismo rango de fechas."
+            ),
+        }
+
+    jornadas = (
+        JornadaDiaria.objects
+        .select_for_update()
+        .select_related(
+            "conductor",
+            "vehiculo",
+            "sucursal",
+        )
+        .filter(
+            conductor=conductor,
+            fecha__range=(
+                fecha_inicio,
+                fecha_fin,
+            ),
+            kilometraje_final__isnull=False,
+            pago_pendiente_conductor__gt=Decimal("0.00"),
+            detalles_liquidacion__isnull=True,
+        )
+    )
+
+    if conductor.sucursal_id is None:
+        jornadas = jornadas.filter(
+            sucursal__isnull=True
+        )
+    else:
+        jornadas = jornadas.filter(
+            sucursal_id=conductor.sucursal_id
+        )
+
+    jornadas = list(
+        jornadas
+        .distinct()
+        .order_by(
+            "fecha",
+            "id",
+        )
+    )
+
+    if not jornadas:
+        return {
+            "procesada": False,
+            "mensaje": (
+                "No existen jornadas pendientes dentro "
+                "del rango seleccionado. Es posible que "
+                "esas fechas ya hayan sido liquidadas."
+            ),
+        }
+
+    total_jornadas = sum(
+        (
+            Decimal(
+                jornada.pago_conductor
+                or "0.00"
+            )
+            for jornada in jornadas
+        ),
+        Decimal("0.00"),
+    )
+
+    movimientos = (
+        Adelanto.objects
+        .select_related("estado")
+        .filter(conductor=conductor)
+    )
+
+    if conductor.sucursal_id is None:
+        movimientos = movimientos.filter(
+            sucursal__isnull=True
+        )
+    else:
+        movimientos = movimientos.filter(
+            sucursal_id=conductor.sucursal_id
+        )
+
+    total_adelantos = Decimal("0.00")
+    total_abonos = Decimal("0.00")
+
+    for movimiento in movimientos:
+        codigo = str(
+            movimiento.estado.codigo
+            if movimiento.estado
+            else ""
+        ).strip().lower()
+
+        monto = Decimal(
+            movimiento.monto
+            or "0.00"
+        )
+
+        if codigo in {
+            "abono",
+            "abonado",
+        }:
+            total_abonos += monto
+        else:
+            total_adelantos += monto
+
+    pendiente_adelantos = (
+        total_adelantos
+        - total_abonos
+    )
+
+    if pendiente_adelantos < Decimal("0.00"):
+        pendiente_adelantos = Decimal("0.00")
+
+    abono_aplicado = Decimal(
+        liquidacion.abono_aplicado
+        or "0.00"
+    )
+
+    ajuste_manual = Decimal(
+        liquidacion.ajuste_manual
+        or "0.00"
+    )
+
+    if abono_aplicado < Decimal("0.00"):
+        return {
+            "procesada": False,
+            "mensaje": (
+                "El abono aplicado no puede ser negativo."
+            ),
+        }
+
+    if ajuste_manual < Decimal("0.00"):
+        return {
+            "procesada": False,
+            "mensaje": (
+                "El ajuste manual no puede ser negativo."
+            ),
+        }
+
+    if abono_aplicado > pendiente_adelantos:
+        return {
+            "procesada": False,
+            "mensaje": (
+                "El abono aplicado no puede ser mayor "
+                "que el saldo pendiente de adelantos."
+            ),
+        }
+
+    total_pago = (
+        total_jornadas
+        - abono_aplicado
+        + ajuste_manual
+    )
+
+    if total_pago < Decimal("0.00"):
+        total_pago = Decimal("0.00")
+
+    detalles = [
+        DetalleLiquidacion(
+            liquidacion=liquidacion,
+            jornada=jornada,
+            fecha=jornada.fecha,
+            vehiculo=(
+                str(jornada.vehiculo)
+                if jornada.vehiculo
+                else ""
+            ),
+            kilometros_recorridos=(
+                jornada.kilometros_recorridos
+                or 0
+            ),
+            ingreso_bruto=(
+                jornada.ingreso_bruto
+                or Decimal("0.00")
+            ),
+            pago_conductor=(
+                jornada.pago_conductor
+                or Decimal("0.00")
+            ),
+        )
+        for jornada in jornadas
+    ]
+
+    DetalleLiquidacion.objects.bulk_create(
+        detalles
+    )
+
+    ids_jornadas = [
+        jornada.id
+        for jornada in jornadas
+    ]
+
+    JornadaDiaria.objects.filter(
+        id__in=ids_jornadas
+    ).update(
+        pago_pendiente_conductor=Decimal("0.00"),
+        saldo_adelanto_excedente=Decimal("0.00"),
+    )
+
+    liquidacion.sucursal = conductor.sucursal
+    liquidacion.usuario = usuario
+    liquidacion.jornadas_count = len(jornadas)
+    liquidacion.total_jornadas = total_jornadas
+    liquidacion.total_adelantos_pendientes = (
+        pendiente_adelantos
+    )
+    liquidacion.total_pago = total_pago
+
+    liquidacion.save(
+        update_fields=[
+            "sucursal",
+            "usuario",
+            "jornadas_count",
+            "total_jornadas",
+            "total_adelantos_pendientes",
+            "total_pago",
+        ]
+    )
+
+    if abono_aplicado > Decimal("0.00"):
+        estado_abono, _ = (
+            EstadoAdelanto.objects
+            .get_or_create(
+                codigo="abono",
+                defaults={
+                    "nombre": "Abono",
+                    "activo": True,
+                },
+            )
+        )
+
+        Adelanto.objects.create(
+            sucursal=conductor.sucursal,
+            conductor=conductor,
+            estado=estado_abono,
+            monto=abono_aplicado,
+            fecha=liquidacion.fecha,
+            observacion=(
+                "Abono aplicado en liquidación "
+                f"#{liquidacion.id}"
+            ),
+        )
+
+    return {
+        "procesada": True,
+        "mensaje": (
+            f"Liquidación #{liquidacion.id} procesada "
+            f"correctamente con {len(jornadas)} jornada(s)."
+        ),
+    }

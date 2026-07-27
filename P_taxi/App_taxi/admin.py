@@ -1,5 +1,5 @@
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin
 
 from .models import (
@@ -23,11 +23,8 @@ from .models import (
     ConfiguracionSistema,
     Liquidacion,
   
-   
-
-
-
 )
+from .api.services import procesar_liquidacion_manual
 
 class LiquidacionAdminForm(forms.ModelForm):
     liquidar = forms.BooleanField(
