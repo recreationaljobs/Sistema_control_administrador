@@ -1246,18 +1246,41 @@ class GastoSerializer(serializers.ModelSerializer):
         )
 
 
-class AdelantoSerializer(serializers.ModelSerializer):
-    sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
-    conductor_nombre = serializers.SerializerMethodField()
-    estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
-    estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
+class AdelantoSerializer(
+    serializers.ModelSerializer
+):
+    sucursal_nombre = serializers.CharField(
+        source="sucursal.nombre",
+        read_only=True,
+    )
 
-    # El frontend envía "tipo" (ADELANTO/ABONO); el backend lo mapea a un
-    # EstadoAdelanto. No es un campo del modelo, por eso es write_only.
-    tipo = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    conductor_nombre = (
+        serializers.SerializerMethodField()
+    )
+
+    estado_nombre = serializers.CharField(
+        source="estado.nombre",
+        read_only=True,
+    )
+
+    estado_codigo = serializers.CharField(
+        source="estado.codigo",
+        read_only=True,
+    )
+
+    tipo = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+    )
+
+    tipo_display = (
+        serializers.SerializerMethodField()
+    )
 
     class Meta:
         model = Adelanto
+
         fields = [
             "id",
             "sucursal",
@@ -1269,12 +1292,12 @@ class AdelantoSerializer(serializers.ModelSerializer):
             "estado_nombre",
             "estado_codigo",
             "tipo",
+            "tipo_display",
             "monto",
             "fecha",
             "observacion",
         ]
-        # sucursal la deriva el servidor (del conductor o de la jornada); el
-        # cliente no la manda. jornada y estado son opcionales.
+
         read_only_fields = [
             "id",
             "sucursal",
@@ -1283,45 +1306,380 @@ class AdelantoSerializer(serializers.ModelSerializer):
             "conductor_nombre",
             "estado_nombre",
             "estado_codigo",
+            "tipo_display",
         ]
+
         extra_kwargs = {
-            "jornada": {"required": False, "allow_null": True},
-           
+            "jornada": {
+                "required": False,
+                "allow_null": True,
+            },
+            "conductor": {
+                "required": False,
+                "allow_null": True,
+            },
+            "fecha": {
+                "required": False,
+            },
         }
 
-    def get_conductor_nombre(self, obj):
-        return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
+    def get_conductor_nombre(
+        self,
+        obj,
+    ):
+        return (
+            f"{obj.conductor.nombre} "
+            f"{obj.conductor.apellido}"
+        ).strip()
 
-    def validate(self, attrs):
-        jornada = attrs.get("jornada", getattr(self.instance, "jornada", None))
-        conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
+    def _obtener_tipo_desde_estado(
+        self,
+        estado,
+    ):
+        codigo = str(
+            estado.codigo
+            if estado
+            else ""
+        ).strip().lower()
 
-        # Un adelanto/abono siempre pertenece a un conductor. Si viene ligado a
-        # una jornada, el conductor se toma de ella; si no, es obligatorio.
-        if not jornada and not conductor:
+        if codigo in {
+            "abono",
+            "abonado",
+        }:
+            return "ABONO"
+
+        return "ADELANTO"
+
+    def get_tipo_display(
+        self,
+        obj,
+    ):
+        tipo = (
+            self._obtener_tipo_desde_estado(
+                obj.estado
+            )
+        )
+
+        return (
+            "Abono"
+            if tipo == "ABONO"
+            else "Adelanto"
+        )
+
+    def to_representation(
+        self,
+        instance,
+    ):
+        data = (
+            super()
+            .to_representation(
+                instance
+            )
+        )
+
+        data["tipo"] = (
+            self._obtener_tipo_desde_estado(
+                instance.estado
+            )
+        )
+
+        return data
+
+    def _normalizar_tipo(
+        self,
+        tipo,
+        estado_actual=None,
+    ):
+        valor = str(
+            tipo or ""
+        ).strip().upper()
+
+        if not valor:
+            return (
+                self
+                ._obtener_tipo_desde_estado(
+                    estado_actual
+                )
+            )
+
+        if valor == "ANTICIPO":
+            return "ADELANTO"
+
+        if valor not in {
+            "ADELANTO",
+            "ABONO",
+        }:
             raise serializers.ValidationError({
-                "conductor": "Debes indicar el conductor del movimiento."
+                "tipo": (
+                    "El tipo debe ser "
+                    "ADELANTO o ABONO."
+                )
             })
 
-        if jornada and conductor and conductor.id != jornada.conductor_id:
-            raise serializers.ValidationError(
-                "El conductor no coincide con la jornada."
+        return valor
+
+    def _calcular_saldo_pendiente(
+        self,
+        conductor,
+        excluir_movimiento_id=None,
+    ):
+        movimientos = (
+            Adelanto.objects
+            .filter(
+                conductor=conductor
             )
+        )
+
+        if conductor.sucursal_id is None:
+            movimientos = (
+                movimientos.filter(
+                    sucursal__isnull=True
+                )
+            )
+        else:
+            movimientos = (
+                movimientos.filter(
+                    sucursal_id=(
+                        conductor.sucursal_id
+                    )
+                )
+            )
+
+        if excluir_movimiento_id:
+            movimientos = (
+                movimientos.exclude(
+                    pk=excluir_movimiento_id
+                )
+            )
+
+        filtro_abonos = (
+            Q(
+                estado__codigo__iexact=(
+                    "abono"
+                )
+            )
+            |
+            Q(
+                estado__codigo__iexact=(
+                    "abonado"
+                )
+            )
+        )
+
+        total_abonos = (
+            movimientos
+            .filter(
+                filtro_abonos
+            )
+            .aggregate(
+                total=Sum("monto")
+            )
+            .get("total")
+            or Decimal("0.00")
+        )
+
+        total_adelantos = (
+            movimientos
+            .exclude(
+                filtro_abonos
+            )
+            .aggregate(
+                total=Sum("monto")
+            )
+            .get("total")
+            or Decimal("0.00")
+        )
+
+        saldo = (
+            Decimal(
+                total_adelantos
+                or "0.00"
+            )
+            -
+            Decimal(
+                total_abonos
+                or "0.00"
+            )
+        )
+
+        if saldo < Decimal("0.00"):
+            return Decimal("0.00")
+
+        return saldo.quantize(
+            Decimal("0.01")
+        )
+
+    def validate(
+        self,
+        attrs,
+    ):
+        jornada = attrs.get(
+            "jornada",
+            getattr(
+                self.instance,
+                "jornada",
+                None,
+            ),
+        )
+
+        conductor = attrs.get(
+            "conductor",
+            getattr(
+                self.instance,
+                "conductor",
+                None,
+            ),
+        )
+
+        if jornada:
+            if (
+                conductor
+                and conductor.id
+                != jornada.conductor_id
+            ):
+                raise serializers.ValidationError({
+                    "conductor": (
+                        "El conductor no coincide "
+                        "con la jornada seleccionada."
+                    )
+                })
+
+            conductor = (
+                jornada.conductor
+            )
+
+            attrs["conductor"] = (
+                conductor
+            )
+
+        if not conductor:
+            raise serializers.ValidationError({
+                "conductor": (
+                    "Debes indicar el conductor "
+                    "del movimiento."
+                )
+            })
+
+        tipo = self._normalizar_tipo(
+            attrs.get("tipo"),
+            getattr(
+                self.instance,
+                "estado",
+                None,
+            ),
+        )
+
+        attrs["tipo"] = tipo
+
+        monto = attrs.get(
+            "monto",
+            getattr(
+                self.instance,
+                "monto",
+                None,
+            ),
+        )
+
+        if monto is None:
+            raise serializers.ValidationError({
+                "monto": (
+                    "Debes ingresar el monto."
+                )
+            })
+
+        monto = Decimal(
+            str(monto)
+        ).quantize(
+            Decimal("0.01")
+        )
+
+        if monto <= Decimal("0.00"):
+            raise serializers.ValidationError({
+                "monto": (
+                    "El monto debe ser mayor "
+                    "que cero."
+                )
+            })
+
+        if tipo == "ABONO":
+            movimiento_id = (
+                self.instance.id
+                if self.instance
+                else None
+            )
+
+            saldo_pendiente = (
+                self
+                ._calcular_saldo_pendiente(
+                    conductor,
+                    excluir_movimiento_id=(
+                        movimiento_id
+                    ),
+                )
+            )
+
+            if saldo_pendiente <= Decimal(
+                "0.00"
+            ):
+                raise serializers.ValidationError({
+                    "monto": (
+                        "Este conductor no tiene "
+                        "saldo pendiente para abonar."
+                    )
+                })
+
+            if monto > saldo_pendiente:
+                raise serializers.ValidationError({
+                    "monto": (
+                        "El abono no puede ser mayor "
+                        "que el saldo pendiente del "
+                        f"conductor: C$ "
+                        f"{saldo_pendiente:,.2f}."
+                    )
+                })
 
         return attrs
 
 
 class JornadaDiariaSerializer(serializers.ModelSerializer):
-    sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
-    conductor_nombre = serializers.SerializerMethodField()
-    vehiculo_placa = serializers.CharField(source="vehiculo.placa", read_only=True)
-    vehiculo_numero = serializers.CharField(source="vehiculo.numero", read_only=True)
-    vehiculo_descripcion = serializers.SerializerMethodField()
-    estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
-    estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
+    sucursal_nombre = serializers.CharField(
+        source="sucursal.nombre",
+        read_only=True,
+    )
 
-    gastos = GastoSerializer(many=True, read_only=True)
-    adelantos = AdelantoSerializer(many=True, read_only=True)
+    conductor_nombre = serializers.SerializerMethodField()
+
+    vehiculo_placa = serializers.CharField(
+        source="vehiculo.placa",
+        read_only=True,
+    )
+
+    vehiculo_numero = serializers.CharField(
+        source="vehiculo.numero",
+        read_only=True,
+    )
+
+    vehiculo_descripcion = serializers.SerializerMethodField()
+
+    estado_nombre = serializers.CharField(
+        source="estado.nombre",
+        read_only=True,
+    )
+
+    estado_codigo = serializers.CharField(
+        source="estado.codigo",
+        read_only=True,
+    )
+
+    gastos = GastoSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    adelantos = AdelantoSerializer(
+        many=True,
+        read_only=True,
+    )
 
     gastos_vehiculo = serializers.SerializerMethodField()
     mantenimiento_vehiculo = serializers.SerializerMethodField()
@@ -1332,6 +1690,7 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = JornadaDiaria
+
         fields = [
             "id",
             "sucursal",
@@ -1419,127 +1778,294 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
             "monto_alquiler": {
                 "required": False,
             },
-
             "tipo_cobro": {
                 "required": False,
             },
-          
         }
 
-    def get_conductor_nombre(self, obj):
-        return f"{obj.conductor.nombre} {obj.conductor.apellido}".strip()
-
-    def get_vehiculo_descripcion(self, obj):
+    def get_conductor_nombre(
+        self,
+        obj,
+    ):
         return (
-            f"{obj.vehiculo.numero} - {obj.vehiculo.placa} - "
-            f"{obj.vehiculo.marca} {obj.vehiculo.modelo}"
+            f"{obj.conductor.nombre} "
+            f"{obj.conductor.apellido}"
+        ).strip()
+
+    def get_vehiculo_descripcion(
+        self,
+        obj,
+    ):
+        return (
+            f"{obj.vehiculo.numero} - "
+            f"{obj.vehiculo.placa} - "
+            f"{obj.vehiculo.marca} "
+            f"{obj.vehiculo.modelo}"
         )
 
-    def get_gastos_vehiculo(self, obj):
-        total = Gasto.objects.filter(
-            vehiculo=obj.vehiculo,
-            fecha=obj.fecha,
-        ).aggregate(total=Sum("monto"))["total"]
+    def get_gastos_vehiculo(
+        self,
+        obj,
+    ):
+        """
+        Los gastos generales del vehículo no se descuentan
+        individualmente en cada jornada.
 
-        return total or Decimal("0.00")
+        El campo se conserva para no romper el frontend.
+        """
 
-    def get_mantenimiento_vehiculo(self, obj):
-        total = Mantenimiento.objects.filter(
-            vehiculo=obj.vehiculo,
-            fecha=obj.fecha,
-        ).aggregate(total=Sum("costo"))["total"]
+        return Decimal("0.00")
 
-        return total or Decimal("0.00")
+    def get_mantenimiento_vehiculo(
+        self,
+        obj,
+    ):
+        """
+        El mantenimiento se descuenta una sola vez en el
+        resumen financiero del período, no en cada jornada.
+        """
 
-    def get_gastos_operativos(self, obj):
-        return self.get_gastos_vehiculo(obj) + self.get_mantenimiento_vehiculo(obj)
+        return Decimal("0.00")
 
-    def get_ganancia_real_dueno(self, obj):
-        ingreso_bruto = obj.ingreso_bruto or Decimal("0.00")
-        pago_conductor = obj.pago_conductor or Decimal("0.00")
-        gastos_operativos = self.get_gastos_operativos(obj)
+    def get_gastos_operativos(
+        self,
+        obj,
+    ):
+        """
+        La jornada individual no carga gastos generales
+        ni mantenimientos del vehículo.
+        """
 
-        ganancia = ingreso_bruto - pago_conductor - gastos_operativos
+        return Decimal("0.00")
 
-        if ganancia < Decimal("0.00"):
-            return Decimal("0.00")
+    def get_ganancia_real_dueno(
+        self,
+        obj,
+    ):
+        """
+        En una jornada individual se muestra la ganancia
+        normal del dueño:
 
-        return ganancia
-    
-        
-    def get_liquidada(self, obj):
-        return obj.detalles_liquidacion.exists()
+        ingreso bruto - pago del conductor.
+        """
 
-    def get_liquidacion_id(self, obj):
-        return (
-            obj.detalles_liquidacion
-            .values_list(
-                "liquidacion_id",
-                flat=True,
+        return Decimal(
+            obj.ganancia_dueno
+            or "0.00"
+        ).quantize(
+            Decimal("0.01")
+        )
+
+    def _obtener_detalle_liquidacion(
+        self,
+        obj,
+    ):
+        """
+        Obtiene el detalle de liquidación usando la relación
+        precargada por el ViewSet.
+
+        Esto evita ejecutar una consulta adicional por cada
+        jornada serializada.
+        """
+
+        cache = getattr(
+            obj,
+            "_detalle_liquidacion_serializado",
+            None,
+        )
+
+        if cache is not None:
+            return cache
+
+        detalles_precargados = getattr(
+            obj,
+            "detalles_liquidacion_prefetch",
+            None,
+        )
+
+        if detalles_precargados is not None:
+            detalle = (
+                detalles_precargados[0]
+                if detalles_precargados
+                else False
             )
-            .first()
+
+        else:
+            detalle = (
+                obj.detalles_liquidacion
+                .only(
+                    "id",
+                    "jornada_id",
+                    "liquidacion_id",
+                )
+                .order_by("id")
+                .first()
+            )
+
+            if detalle is None:
+                detalle = False
+
+        setattr(
+            obj,
+            "_detalle_liquidacion_serializado",
+            detalle,
         )
 
-    def validate(self, attrs):
-        request = self.context.get("request")
-        user = request.user if request else None
+        return detalle
+
+    def get_liquidada(
+        self,
+        obj,
+    ):
+        detalle = (
+            self._obtener_detalle_liquidacion(
+                obj
+            )
+        )
+
+        return bool(detalle)
+
+    def get_liquidacion_id(
+        self,
+        obj,
+    ):
+        detalle = (
+            self._obtener_detalle_liquidacion(
+                obj
+            )
+        )
+
+        if not detalle:
+            return None
+
+        return detalle.liquidacion_id
+
+    def validate(
+        self,
+        attrs,
+    ):
+        request = self.context.get(
+            "request"
+        )
+
+        user = (
+            request.user
+            if request
+            else None
+        )
 
         kilometraje_inicial = attrs.get(
             "kilometraje_inicial",
-            getattr(self.instance, "kilometraje_inicial", None)
+            getattr(
+                self.instance,
+                "kilometraje_inicial",
+                None,
+            ),
         )
 
         kilometraje_final = attrs.get(
             "kilometraje_final",
-            getattr(self.instance, "kilometraje_final", None)
+            getattr(
+                self.instance,
+                "kilometraje_final",
+                None,
+            ),
         )
 
-        if kilometraje_inicial is not None and kilometraje_final is not None:
-            if kilometraje_final < kilometraje_inicial:
-                raise serializers.ValidationError({
-                    "kilometraje_final": "El kilometraje final no puede ser menor al kilometraje inicial."
-                })
+        if (
+            kilometraje_inicial is not None
+            and kilometraje_final is not None
+            and kilometraje_final < kilometraje_inicial
+        ):
+            raise serializers.ValidationError({
+                "kilometraje_final": (
+                    "El kilometraje final no puede ser "
+                    "menor al kilometraje inicial."
+                )
+            })
 
-        conductor = attrs.get("conductor", getattr(self.instance, "conductor", None))
-        vehiculo = attrs.get("vehiculo", getattr(self.instance, "vehiculo", None))
+        conductor = attrs.get(
+            "conductor",
+            getattr(
+                self.instance,
+                "conductor",
+                None,
+            ),
+        )
+
+        vehiculo = attrs.get(
+            "vehiculo",
+            getattr(
+                self.instance,
+                "vehiculo",
+                None,
+            ),
+        )
 
         if not user or not user.rol:
             raise serializers.ValidationError(
                 "No se pudo validar el usuario autenticado."
             )
 
-        codigo_rol = user.rol.codigo
+        codigo_rol = str(
+            user.rol.codigo
+            or ""
+        ).strip().lower()
 
         if codigo_rol == "taxista":
             try:
-                conductor_usuario = user.perfil_conductor
+                conductor_usuario = (
+                    user.perfil_conductor
+                )
+
             except Conductor.DoesNotExist:
                 raise serializers.ValidationError({
-                    "conductor": "Este usuario no tiene perfil de conductor."
+                    "conductor": (
+                        "Este usuario no tiene "
+                        "perfil de conductor."
+                    )
                 })
 
             conductor = conductor_usuario
-            attrs["conductor"] = conductor_usuario
+
+            attrs["conductor"] = (
+                conductor_usuario
+            )
 
         if not conductor:
             raise serializers.ValidationError({
-                "conductor": "Debes seleccionar un conductor."
+                "conductor": (
+                    "Debes seleccionar un conductor."
+                )
             })
 
         if not vehiculo:
             raise serializers.ValidationError({
-                "vehiculo": "Debes seleccionar un vehículo."
+                "vehiculo": (
+                    "Debes seleccionar un vehículo."
+                )
             })
 
-        if codigo_rol in ["superadmin", "super_admin"]:
+        if codigo_rol in {
+            "superadmin",
+            "super_admin",
+        }:
             if conductor.sucursal_id is not None:
                 raise serializers.ValidationError({
-                    "conductor": "Desde el panel superadmin solo puedes registrar jornadas para conductores del superadmin."
+                    "conductor": (
+                        "Desde el panel superadmin solo "
+                        "puedes registrar jornadas para "
+                        "conductores del superadmin."
+                    )
                 })
 
             if vehiculo.sucursal_id is not None:
                 raise serializers.ValidationError({
-                    "vehiculo": "Desde el panel superadmin solo puedes registrar jornadas para vehículos del superadmin."
+                    "vehiculo": (
+                        "Desde el panel superadmin solo "
+                        "puedes registrar jornadas para "
+                        "vehículos del superadmin."
+                    )
                 })
 
             attrs["sucursal"] = None
@@ -1547,58 +2073,109 @@ class JornadaDiariaSerializer(serializers.ModelSerializer):
         elif codigo_rol == "admin_sucursal":
             if not user.sucursal:
                 raise serializers.ValidationError({
-                    "sucursal": "Tu usuario no tiene una sucursal asignada."
+                    "sucursal": (
+                        "Tu usuario no tiene una "
+                        "sucursal asignada."
+                    )
                 })
 
-            if conductor.sucursal_id != user.sucursal_id:
+            if (
+                conductor.sucursal_id
+                != user.sucursal_id
+            ):
                 raise serializers.ValidationError({
-                    "conductor": "No puedes registrar jornadas para conductores de otra sucursal."
+                    "conductor": (
+                        "No puedes registrar jornadas "
+                        "para conductores de otra sucursal."
+                    )
                 })
 
-            if vehiculo.sucursal_id != user.sucursal_id:
+            if (
+                vehiculo.sucursal_id
+                != user.sucursal_id
+            ):
                 raise serializers.ValidationError({
-                    "vehiculo": "No puedes registrar jornadas para vehículos de otra sucursal."
+                    "vehiculo": (
+                        "No puedes registrar jornadas "
+                        "para vehículos de otra sucursal."
+                    )
                 })
 
-            attrs["sucursal"] = user.sucursal
+            attrs["sucursal"] = (
+                user.sucursal
+            )
 
         elif codigo_rol == "taxista":
-            if conductor.usuario_id != user.id:
+            if (
+                conductor.usuario_id
+                != user.id
+            ):
                 raise serializers.ValidationError({
-                    "conductor": "No puedes registrar jornadas para otro conductor."
+                    "conductor": (
+                        "No puedes registrar jornadas "
+                        "para otro conductor."
+                    )
                 })
 
-            if conductor.sucursal_id != vehiculo.sucursal_id:
+            if (
+                conductor.sucursal_id
+                != vehiculo.sucursal_id
+            ):
                 raise serializers.ValidationError({
-                    "vehiculo": "El vehículo no pertenece al mismo entorno que el conductor."
+                    "vehiculo": (
+                        "El vehículo no pertenece al "
+                        "mismo entorno que el conductor."
+                    )
                 })
 
-            attrs["sucursal"] = conductor.sucursal
+            attrs["sucursal"] = (
+                conductor.sucursal
+            )
 
         else:
             raise serializers.ValidationError(
                 "No tienes permiso para registrar jornadas."
             )
 
-        asignacion_activa = AsignacionVehiculo.objects.filter(
-            conductor=conductor,
-            vehiculo=vehiculo,
-            activa=True
+        asignacion_activa = (
+            AsignacionVehiculo.objects
+            .filter(
+                conductor=conductor,
+                vehiculo=vehiculo,
+                activa=True,
+            )
         )
 
-        if codigo_rol in ["superadmin", "super_admin"]:
-            asignacion_activa = asignacion_activa.filter(sucursal__isnull=True)
+        if codigo_rol in {
+            "superadmin",
+            "super_admin",
+        }:
+            asignacion_activa = (
+                asignacion_activa.filter(
+                    sucursal__isnull=True
+                )
+            )
 
-        elif codigo_rol in ["admin_sucursal", "taxista"]:
-            asignacion_activa = asignacion_activa.filter(sucursal=conductor.sucursal)
+        elif codigo_rol in {
+            "admin_sucursal",
+            "taxista",
+        }:
+            asignacion_activa = (
+                asignacion_activa.filter(
+                    sucursal=conductor.sucursal
+                )
+            )
 
         if not asignacion_activa.exists():
             raise serializers.ValidationError({
-                "vehiculo": "El conductor no tiene una asignación activa con ese vehículo."
+                "vehiculo": (
+                    "El conductor no tiene una asignación "
+                    "activa con ese vehículo."
+                )
             })
 
         return attrs
-
+    
 class MantenimientoSerializer(serializers.ModelSerializer):
     sucursal_nombre = serializers.CharField(
         source="sucursal.nombre",

@@ -3,9 +3,12 @@ import logging
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Prefetch, Q, Sum
+from django.db.models import Prefetch, Q, Sum, DecimalField ,Count,Max
+from django.db.models.functions import Coalesce
+from django.db.models import Value
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+
 
 from rest_framework import status, viewsets
 from django.db.models.functions import TruncMonth
@@ -175,8 +178,9 @@ class RegistrarDispositivoNotificacionView(APIView):
 
         if codigo_rol == "taxista":
             tipo_notificaciones = (
-                "Recibirás recordatorios para abrir "
-                "y cerrar tu jornada."
+                "Recibirás recordatorios para abrir y cerrar "
+                "tu jornada, además de alertas del próximo "
+                "cambio de aceite del vehículo asignado."
             )
 
         elif codigo_rol == "admin_sucursal":
@@ -1508,8 +1512,12 @@ class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK
         )
 
-class JornadaDiariaViewSet(viewsets.ModelViewSet):
-    serializer_class = JornadaDiariaSerializer
+class JornadaDiariaViewSet(
+    viewsets.ModelViewSet
+):
+    serializer_class = (
+        JornadaDiariaSerializer
+    )
 
     def get_permissions(self):
         if self.action in [
@@ -1518,92 +1526,275 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
             "destroy",
             "registrar_ingreso",
         ]:
-            return [EsAdminSucursalOSuperAdmin()]
+            return [
+                EsAdminSucursalOSuperAdmin()
+            ]
 
-        return [IsAuthenticated()]
+        return [
+            IsAuthenticated()
+        ]
 
     def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context["request"] = self.request
+        context = (
+            super()
+            .get_serializer_context()
+        )
+
+        context["request"] = (
+            self.request
+        )
+
         return context
 
     def get_queryset(self):
         user = self.request.user
 
-        qs = JornadaDiaria.objects.select_related(
-            "sucursal",
-            "estado",
-            "conductor",
-            "vehiculo"
-        ).prefetch_related(
-            "gastos",
-            "adelantos",
-            "detalles_liquidacion",
-        ).all()
+        gastos_queryset = (
+            Gasto.objects
+            .select_related(
+                "sucursal",
+                "vehiculo",
+                "tipo_gasto",
+                "estado",
+            )
+            .order_by("id")
+        )
 
-        fecha = self.request.query_params.get("fecha")
-        fecha_inicio = self.request.query_params.get("fecha_inicio")
-        fecha_fin = self.request.query_params.get("fecha_fin")
-        conductor_id = self.request.query_params.get("conductor")
-        vehiculo_id = self.request.query_params.get("vehiculo")
+        adelantos_queryset = (
+            Adelanto.objects
+            .select_related(
+                "sucursal",
+                "jornada",
+                "conductor",
+                "estado",
+            )
+            .order_by("id")
+        )
+
+        detalles_liquidacion_queryset = (
+            DetalleLiquidacion.objects
+            .only(
+                "id",
+                "jornada_id",
+                "liquidacion_id",
+            )
+            .order_by("id")
+        )
+
+        qs = (
+            JornadaDiaria.objects
+            .select_related(
+                "sucursal",
+                "estado",
+                "conductor",
+                "vehiculo",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "gastos",
+                    queryset=(
+                        gastos_queryset
+                    ),
+                ),
+                Prefetch(
+                    "adelantos",
+                    queryset=(
+                        adelantos_queryset
+                    ),
+                ),
+                Prefetch(
+                    "detalles_liquidacion",
+                    queryset=(
+                        detalles_liquidacion_queryset
+                    ),
+                    to_attr=(
+                        "detalles_liquidacion_prefetch"
+                    ),
+                ),
+            )
+            .order_by(
+                "-fecha",
+                "-id",
+            )
+        )
+
+        fecha = (
+            self.request
+            .query_params
+            .get("fecha")
+        )
+
+        fecha_inicio = (
+            self.request
+            .query_params
+            .get("fecha_inicio")
+        )
+
+        fecha_fin = (
+            self.request
+            .query_params
+            .get("fecha_fin")
+        )
+
+        conductor_id = (
+            self.request
+            .query_params
+            .get("conductor")
+        )
+
+        vehiculo_id = (
+            self.request
+            .query_params
+            .get("vehiculo")
+        )
 
         if es_superadmin(user):
-            qs = qs.filter(sucursal__isnull=True)
+            qs = qs.filter(
+                sucursal__isnull=True
+            )
 
         elif es_admin_sucursal(user):
-            qs = qs.filter(sucursal=user.sucursal)
+            if not user.sucursal_id:
+                return qs.none()
+
+            qs = qs.filter(
+                sucursal_id=(
+                    user.sucursal_id
+                )
+            )
 
         elif es_taxista(user):
-            qs = qs.filter(conductor__usuario=user)
+            qs = qs.filter(
+                conductor__usuario=user
+            )
 
         else:
             return qs.none()
 
         if fecha:
-            qs = qs.filter(fecha=fecha)
+            qs = qs.filter(
+                fecha=fecha
+            )
 
         if fecha_inicio:
-            qs = qs.filter(fecha__gte=fecha_inicio)
+            qs = qs.filter(
+                fecha__gte=fecha_inicio
+            )
 
         if fecha_fin:
-            qs = qs.filter(fecha__lte=fecha_fin)
+            qs = qs.filter(
+                fecha__lte=fecha_fin
+            )
 
         if conductor_id:
-            qs = qs.filter(conductor_id=conductor_id)
+            qs = qs.filter(
+                conductor_id=conductor_id
+            )
 
         if vehiculo_id:
-            qs = qs.filter(vehiculo_id=vehiculo_id)
+            qs = qs.filter(
+                vehiculo_id=vehiculo_id
+            )
 
         return qs
 
-    def _obtener_porcentaje_fallback(self, sucursal):
-        # Fallback: % por defecto de la config de la sucursal (o global).
-        configuracion = obtener_configuracion_sucursal(sucursal)
-        return configuracion.porcentaje_pago_conductor
+    def _obtener_porcentaje_fallback(
+        self,
+        sucursal,
+    ):
+        configuracion = (
+            obtener_configuracion_sucursal(
+                sucursal
+            )
+        )
 
-    def _resolver_porcentaje(self, conductor, sucursal):
-        porcentaje = getattr(conductor, "porcentaje_pago", None)
+        return (
+            configuracion
+            .porcentaje_pago_conductor
+        )
 
-        if porcentaje is None or porcentaje == "":
-            porcentaje = self._obtener_porcentaje_fallback(sucursal)
+    def _resolver_porcentaje(
+        self,
+        conductor,
+        sucursal,
+    ):
+        porcentaje = getattr(
+            conductor,
+            "porcentaje_pago",
+            None,
+        )
 
-        porcentaje = Decimal(str(porcentaje or "0.00"))
+        if porcentaje in [
+            None,
+            "",
+        ]:
+            porcentaje = (
+                self
+                ._obtener_porcentaje_fallback(
+                    sucursal
+                )
+            )
 
-        if porcentaje < Decimal("1.00") or porcentaje > Decimal("100.00"):
+        porcentaje = Decimal(
+            str(
+                porcentaje
+                or "0.00"
+            )
+        )
+
+        if (
+            porcentaje
+            < Decimal("1.00")
+            or porcentaje
+            > Decimal("100.00")
+        ):
             raise ValidationError({
-                "porcentaje_pago": "El porcentaje del conductor debe estar entre 1 y 100."
+                "porcentaje_pago": (
+                    "El porcentaje del conductor "
+                    "debe estar entre 1 y 100."
+                )
             })
 
-        return porcentaje.quantize(Decimal("0.01"))
-    
+        return porcentaje.quantize(
+            Decimal("0.01")
+        )
+
+    def _obtener_detalle_liquidacion(
+        self,
+        jornada,
+    ):
+        detalles_precargados = getattr(
+            jornada,
+            "detalles_liquidacion_prefetch",
+            None,
+        )
+
+        if detalles_precargados is not None:
+            return (
+                detalles_precargados[0]
+                if detalles_precargados
+                else None
+            )
+
+        return (
+            jornada.detalles_liquidacion
+            .only(
+                "id",
+                "jornada_id",
+                "liquidacion_id",
+            )
+            .order_by("id")
+            .first()
+        )
+
     def _validar_jornada_no_liquidada(
         self,
         jornada,
     ):
         detalle = (
-            jornada.detalles_liquidacion
-            .only("liquidacion_id")
-            .first()
+            self._obtener_detalle_liquidacion(
+                jornada
+            )
         )
 
         if detalle:
@@ -1615,372 +1806,973 @@ class JornadaDiariaViewSet(viewsets.ModelViewSet):
                 )
             })
 
-    def perform_create(self, serializer):
+    def _obtener_estado_jornada(
+        self,
+        codigo,
+        nombre,
+    ):
+        estado, _ = (
+            EstadoJornada.objects
+            .get_or_create(
+                codigo=codigo,
+                defaults={
+                    "nombre": nombre,
+                    "activo": True,
+                },
+            )
+        )
+
+        campos_actualizados = []
+
+        if estado.nombre != nombre:
+            estado.nombre = nombre
+
+            campos_actualizados.append(
+                "nombre"
+            )
+
+        if not estado.activo:
+            estado.activo = True
+
+            campos_actualizados.append(
+                "activo"
+            )
+
+        if campos_actualizados:
+            estado.save(
+                update_fields=(
+                    campos_actualizados
+                )
+            )
+
+        return estado
+
+    def _obtener_estado_vehiculo(
+        self,
+        codigo,
+        nombre,
+    ):
+        estado, _ = (
+            EstadoVehiculo.objects
+            .get_or_create(
+                codigo=codigo,
+                defaults={
+                    "nombre": nombre,
+                    "activo": True,
+                },
+            )
+        )
+
+        campos_actualizados = []
+
+        if estado.nombre != nombre:
+            estado.nombre = nombre
+
+            campos_actualizados.append(
+                "nombre"
+            )
+
+        if not estado.activo:
+            estado.activo = True
+
+            campos_actualizados.append(
+                "activo"
+            )
+
+        if campos_actualizados:
+            estado.save(
+                update_fields=(
+                    campos_actualizados
+                )
+            )
+
+        return estado
+
+    def perform_create(
+        self,
+        serializer,
+    ):
         user = self.request.user
 
-        conductor = serializer.validated_data.get("conductor")
-        vehiculo = serializer.validated_data.get("vehiculo")
+        conductor = (
+            serializer
+            .validated_data
+            .get("conductor")
+        )
+
+        vehiculo = (
+            serializer
+            .validated_data
+            .get("vehiculo")
+        )
 
         if es_taxista(user):
             try:
-                conductor = user.perfil_conductor
-            except Conductor.DoesNotExist:
-                raise ValidationError("Este usuario no tiene perfil de conductor.")
-
-        if not conductor:
-            raise ValidationError("Debes indicar el conductor.")
-
-        if not vehiculo:
-            raise ValidationError("Debes indicar el vehículo.")
-
-        if es_superadmin(user):
-            if conductor.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes registrar jornadas de conductores de sucursal desde el panel superadmin."
+                conductor = (
+                    user.perfil_conductor
                 )
 
-            if vehiculo.sucursal_id is not None:
+            except Conductor.DoesNotExist:
+                raise ValidationError(
+                    "Este usuario no tiene perfil de conductor."
+                )
+
+        if not conductor:
+            raise ValidationError(
+                "Debes indicar el conductor."
+            )
+
+        if not vehiculo:
+            raise ValidationError(
+                "Debes indicar el vehículo."
+            )
+
+        if es_superadmin(user):
+            if (
+                conductor.sucursal_id
+                is not None
+            ):
                 raise PermissionDenied(
-                    "No puedes registrar jornadas de vehículos de sucursal desde el panel superadmin."
+                    "No puedes registrar jornadas de "
+                    "conductores de sucursal desde el "
+                    "panel superadmin."
+                )
+
+            if (
+                vehiculo.sucursal_id
+                is not None
+            ):
+                raise PermissionDenied(
+                    "No puedes registrar jornadas de "
+                    "vehículos de sucursal desde el "
+                    "panel superadmin."
                 )
 
             sucursal = None
 
         elif es_admin_sucursal(user):
             if not user.sucursal:
-                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+                raise ValidationError(
+                    "Tu usuario no tiene una sucursal asignada."
+                )
 
-            if conductor.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes registrar jornadas para conductores de otra sucursal.")
+            if (
+                conductor.sucursal_id
+                != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes registrar jornadas para "
+                    "conductores de otra sucursal."
+                )
 
-            if vehiculo.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes registrar jornadas para vehículos de otra sucursal.")
+            if (
+                vehiculo.sucursal_id
+                != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes registrar jornadas para "
+                    "vehículos de otra sucursal."
+                )
 
             sucursal = user.sucursal
 
         elif es_taxista(user):
-            if conductor.usuario_id != user.id:
-                raise PermissionDenied("No puedes crear jornadas para otro conductor.")
+            if (
+                conductor.usuario_id
+                != user.id
+            ):
+                raise PermissionDenied(
+                    "No puedes crear jornadas para otro conductor."
+                )
 
-            if conductor.sucursal_id != vehiculo.sucursal_id:
-                raise ValidationError("El conductor y el vehículo deben pertenecer al mismo entorno.")
+            if (
+                conductor.sucursal_id
+                != vehiculo.sucursal_id
+            ):
+                raise ValidationError(
+                    "El conductor y el vehículo deben "
+                    "pertenecer al mismo entorno."
+                )
 
-            sucursal = conductor.sucursal
+            sucursal = (
+                conductor.sucursal
+            )
 
         else:
-            raise PermissionDenied("No tienes permiso para crear jornadas.")
+            raise PermissionDenied(
+                "No tienes permiso para crear jornadas."
+            )
 
-        asignacion_activa = AsignacionVehiculo.objects.filter(
-            sucursal=sucursal,
-            conductor=conductor,
-            vehiculo=vehiculo,
-            activa=True
-        ).exists()
+        asignacion_activa = (
+            AsignacionVehiculo.objects
+            .filter(
+                sucursal=sucursal,
+                conductor=conductor,
+                vehiculo=vehiculo,
+                activa=True,
+            )
+            .exists()
+        )
 
         if not asignacion_activa:
-            raise ValidationError("El conductor no tiene una asignación activa con ese vehículo.")
+            raise ValidationError(
+                "El conductor no tiene una asignación "
+                "activa con ese vehículo."
+            )
 
-        fecha = serializer.validated_data.get("fecha", timezone.localdate())
+        fecha = (
+            serializer
+            .validated_data
+            .get(
+                "fecha",
+                timezone.localdate(),
+            )
+        )
 
-        jornada_existente = JornadaDiaria.objects.filter(
-            fecha=fecha,
-            conductor=conductor,
-            vehiculo=vehiculo
-        ).first()
+        jornada_existente = (
+            JornadaDiaria.objects
+            .filter(
+                fecha=fecha,
+                conductor=conductor,
+                vehiculo=vehiculo,
+            )
+            .exists()
+        )
 
         if jornada_existente:
             raise ValidationError({
-                "detail": "Ya existe una jornada para este conductor y vehículo en esta fecha. Debes cerrar la jornada existente, no crear otra."
+                "detail": (
+                    "Ya existe una jornada para este "
+                    "conductor y vehículo en esta fecha. "
+                    "Debes cerrar la jornada existente, "
+                    "no crear otra."
+                )
             })
 
-        porcentaje = self._resolver_porcentaje(conductor, sucursal)
+        porcentaje = (
+            self._resolver_porcentaje(
+                conductor,
+                sucursal,
+            )
+        )
+
+        estado_jornada_circulando = (
+            self._obtener_estado_jornada(
+                codigo="circulando",
+                nombre="Circulando",
+            )
+        )
+
+        estado_vehiculo_circulando = (
+            self._obtener_estado_vehiculo(
+                codigo="circulando",
+                nombre="Circulando",
+            )
+        )
 
         jornada = serializer.save(
             sucursal=sucursal,
             conductor=conductor,
             vehiculo=vehiculo,
+            estado=(
+                estado_jornada_circulando
+            ),
             kilometraje_final=None,
             kilometros_recorridos=0,
             ingreso_bruto=Decimal("0.00"),
             monto_alquiler=Decimal("0.00"),
             tipo_cobro="porcentaje",
-            porcentaje_pago_conductor=porcentaje,
+            porcentaje_pago_conductor=(
+                porcentaje
+            ),
             pago_conductor=Decimal("0.00"),
         )
 
-        recalcular_totales_jornada(jornada)
+        vehiculo.estado = (
+            estado_vehiculo_circulando
+        )
 
-    def perform_update(self, serializer):
+        vehiculo.save(
+            update_fields=[
+                "estado",
+            ]
+        )
+
+        recalcular_totales_jornada(
+            jornada
+        )
+
+    def perform_update(
+        self,
+        serializer,
+    ):
         user = self.request.user
+
         instance = self.get_object()
 
         self._validar_jornada_no_liquidada(
             instance
         )
 
-        conductor = serializer.validated_data.get("conductor", instance.conductor)
-        vehiculo = serializer.validated_data.get("vehiculo", instance.vehiculo)
+        conductor = (
+            serializer
+            .validated_data
+            .get(
+                "conductor",
+                instance.conductor,
+            )
+        )
+
+        vehiculo = (
+            serializer
+            .validated_data
+            .get(
+                "vehiculo",
+                instance.vehiculo,
+            )
+        )
 
         if es_superadmin(user):
-            if instance.sucursal_id is not None:
+            if (
+                instance.sucursal_id
+                is not None
+            ):
                 raise PermissionDenied(
-                    "No puedes modificar jornadas de sucursal desde el panel superadmin."
+                    "No puedes modificar jornadas de "
+                    "sucursal desde el panel superadmin."
                 )
 
-            if conductor.sucursal_id is not None:
+            if (
+                conductor.sucursal_id
+                is not None
+            ):
                 raise PermissionDenied(
-                    "No puedes usar conductores de sucursal desde el panel superadmin."
+                    "No puedes usar conductores de sucursal "
+                    "desde el panel superadmin."
                 )
 
-            if vehiculo.sucursal_id is not None:
+            if (
+                vehiculo.sucursal_id
+                is not None
+            ):
                 raise PermissionDenied(
-                    "No puedes usar vehículos de sucursal desde el panel superadmin."
+                    "No puedes usar vehículos de sucursal "
+                    "desde el panel superadmin."
                 )
 
             sucursal = None
 
         elif es_admin_sucursal(user):
             if not user.sucursal:
-                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
+                raise ValidationError(
+                    "Tu usuario no tiene una sucursal asignada."
+                )
 
-            if instance.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes modificar jornadas de otra sucursal.")
+            if (
+                instance.sucursal_id
+                != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes modificar jornadas de otra sucursal."
+                )
 
-            if conductor.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes usar conductores de otra sucursal.")
+            if (
+                conductor.sucursal_id
+                != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes usar conductores de otra sucursal."
+                )
 
-            if vehiculo.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes usar vehículos de otra sucursal.")
+            if (
+                vehiculo.sucursal_id
+                != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes usar vehículos de otra sucursal."
+                )
 
             sucursal = user.sucursal
 
         elif es_taxista(user):
-            if instance.conductor.usuario_id != user.id:
-                raise PermissionDenied("No puedes modificar jornadas de otro conductor.")
+            if (
+                instance.conductor.usuario_id
+                != user.id
+            ):
+                raise PermissionDenied(
+                    "No puedes modificar jornadas de otro conductor."
+                )
 
-            if conductor.usuario_id != user.id:
-                raise PermissionDenied("No puedes cambiar la jornada a otro conductor.")
+            if (
+                conductor.usuario_id
+                != user.id
+            ):
+                raise PermissionDenied(
+                    "No puedes cambiar la jornada a otro conductor."
+                )
 
-            if conductor.sucursal_id != vehiculo.sucursal_id:
-                raise ValidationError("El conductor y el vehículo deben pertenecer al mismo entorno.")
+            if (
+                conductor.sucursal_id
+                != vehiculo.sucursal_id
+            ):
+                raise ValidationError(
+                    "El conductor y el vehículo deben "
+                    "pertenecer al mismo entorno."
+                )
 
-            sucursal = conductor.sucursal
+            sucursal = (
+                conductor.sucursal
+            )
 
         else:
-            raise PermissionDenied("No tienes permiso para modificar jornadas.")
+            raise PermissionDenied(
+                "No tienes permiso para modificar jornadas."
+            )
 
-        asignacion_activa = AsignacionVehiculo.objects.filter(
-            sucursal=sucursal,
-            conductor=conductor,
-            vehiculo=vehiculo,
-            activa=True
-        ).exists()
+        asignacion_activa = (
+            AsignacionVehiculo.objects
+            .filter(
+                sucursal=sucursal,
+                conductor=conductor,
+                vehiculo=vehiculo,
+                activa=True,
+            )
+            .exists()
+        )
 
         if not asignacion_activa:
-            raise ValidationError("El conductor no tiene una asignación activa con ese vehículo.")
+            raise ValidationError(
+                "El conductor no tiene una asignación "
+                "activa con ese vehículo."
+            )
 
-        porcentaje = self._resolver_porcentaje(conductor, sucursal)
-
-        km_inicial = serializer.validated_data.get(
-            "kilometraje_inicial",
-            instance.kilometraje_inicial
+        porcentaje = (
+            self._resolver_porcentaje(
+                conductor,
+                sucursal,
+            )
         )
 
-        km_final = serializer.validated_data.get(
-            "kilometraje_final",
-            instance.kilometraje_final
+        km_inicial = (
+            serializer
+            .validated_data
+            .get(
+                "kilometraje_inicial",
+                instance.kilometraje_inicial,
+            )
         )
 
-        ingreso_bruto = serializer.validated_data.get(
-            "ingreso_bruto",
-            instance.ingreso_bruto
+        km_final = (
+            serializer
+            .validated_data
+            .get(
+                "kilometraje_final",
+                instance.kilometraje_final,
+            )
         )
 
-        campos_calculados = calcular_campos_jornada(
-            km_inicial,
-            km_final,
-            ingreso_bruto,
-            porcentaje,
-            serializer.validated_data.get("tipo_cobro", instance.tipo_cobro),
-            serializer.validated_data.get("monto_alquiler", instance.monto_alquiler),
+        ingreso_bruto = (
+            serializer
+            .validated_data
+            .get(
+                "ingreso_bruto",
+                instance.ingreso_bruto,
+            )
+        )
+
+        tipo_cobro = (
+            serializer
+            .validated_data
+            .get(
+                "tipo_cobro",
+                instance.tipo_cobro,
+            )
+        )
+
+        monto_alquiler = (
+            serializer
+            .validated_data
+            .get(
+                "monto_alquiler",
+                instance.monto_alquiler,
+            )
+        )
+
+        campos_calculados = (
+            calcular_campos_jornada(
+                km_inicial,
+                km_final,
+                ingreso_bruto,
+                porcentaje,
+                tipo_cobro,
+                monto_alquiler,
+            )
         )
 
         jornada = serializer.save(
             sucursal=sucursal,
             conductor=conductor,
             vehiculo=vehiculo,
-            porcentaje_pago_conductor=porcentaje,
-            kilometros_recorridos=campos_calculados["kilometros_recorridos"],
-            pago_conductor=campos_calculados["pago_conductor"]
+            porcentaje_pago_conductor=(
+                porcentaje
+            ),
+            kilometros_recorridos=(
+                campos_calculados[
+                    "kilometros_recorridos"
+                ]
+            ),
+            pago_conductor=(
+                campos_calculados[
+                    "pago_conductor"
+                ]
+            ),
         )
 
-        actualizar_kilometraje_vehiculo(vehiculo, jornada.kilometraje_final)
-        recalcular_totales_jornada(jornada)
+        actualizar_kilometraje_vehiculo(
+            vehiculo,
+            jornada.kilometraje_final,
+        )
 
-    def perform_destroy(self, instance):
+        recalcular_totales_jornada(
+            jornada
+        )
+
+    def perform_destroy(
+        self,
+        instance,
+    ):
         self._validar_jornada_no_liquidada(
             instance
         )
 
         instance.delete()
-    
-    @action(detail=True, methods=["patch"], url_path="cerrar")
-    def cerrar(self, request, pk=None):
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path="cerrar",
+    )
+    def cerrar(
+        self,
+        request,
+        pk=None,
+    ):
         jornada = self.get_object()
         user = request.user
 
-        kilometraje_final = request.data.get("kilometraje_final")
-        ingreso_bruto = request.data.get("ingreso_bruto", jornada.ingreso_bruto)
+        kilometraje_final = (
+            request.data.get(
+                "kilometraje_final"
+            )
+        )
 
-        if kilometraje_final in [None, ""]:
+        ingreso_bruto = (
+            request.data.get(
+                "ingreso_bruto",
+                jornada.ingreso_bruto,
+            )
+        )
+
+        if kilometraje_final in [
+            None,
+            "",
+        ]:
             raise ValidationError({
-                "kilometraje_final": "Debes ingresar el kilometraje final."
+                "kilometraje_final": (
+                    "Debes ingresar el kilometraje final."
+                )
             })
 
         try:
-            kilometraje_final = int(kilometraje_final)
-        except (TypeError, ValueError):
+            kilometraje_final = int(
+                kilometraje_final
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
             raise ValidationError({
-                "kilometraje_final": "El kilometraje final debe ser un número válido."
+                "kilometraje_final": (
+                    "El kilometraje final debe ser "
+                    "un número válido."
+                )
             })
 
-        if jornada.kilometraje_final is not None:
+        if (
+            jornada.kilometraje_final
+            is not None
+        ):
             raise ValidationError({
-                "detail": "Esta jornada ya fue cerrada."
+                "detail": (
+                    "Esta jornada ya fue cerrada."
+                )
             })
 
-        if kilometraje_final < jornada.kilometraje_inicial:
+        if (
+            kilometraje_final
+            < jornada.kilometraje_inicial
+        ):
             raise ValidationError({
-                "kilometraje_final": "El kilometraje final no puede ser menor al kilometraje inicial."
+                "kilometraje_final": (
+                    "El kilometraje final no puede ser "
+                    "menor al kilometraje inicial."
+                )
             })
 
         if es_taxista(user):
-            if jornada.conductor.usuario_id != user.id:
-                raise PermissionDenied("No puedes cerrar una jornada de otro conductor.")
+            if (
+                jornada.conductor.usuario_id
+                != user.id
+            ):
+                raise PermissionDenied(
+                    "No puedes cerrar una jornada "
+                    "de otro conductor."
+                )
 
         elif es_admin_sucursal(user):
-            if jornada.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes cerrar jornadas de otra sucursal.")
+            if (
+                jornada.sucursal_id
+                != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes cerrar jornadas "
+                    "de otra sucursal."
+                )
 
         elif es_superadmin(user):
-            if jornada.sucursal_id is not None:
-                raise PermissionDenied("No puedes cerrar jornadas de una sucursal desde el panel superadmin.")
+            if (
+                jornada.sucursal_id
+                is not None
+            ):
+                raise PermissionDenied(
+                    "No puedes cerrar jornadas de una "
+                    "sucursal desde el panel superadmin."
+                )
 
         else:
-            raise PermissionDenied("No tienes permiso para cerrar esta jornada.")
+            raise PermissionDenied(
+                "No tienes permiso para cerrar esta jornada."
+            )
 
-        porcentaje = self._resolver_porcentaje(jornada.conductor, jornada.sucursal)
-
-        campos_calculados = calcular_campos_jornada(
-            jornada.kilometraje_inicial,
-            kilometraje_final,
-            ingreso_bruto,
-            porcentaje,
-            jornada.tipo_cobro,
-            jornada.monto_alquiler,
+        porcentaje = (
+            self._resolver_porcentaje(
+                jornada.conductor,
+                jornada.sucursal,
+            )
         )
 
-        jornada.kilometraje_final = kilometraje_final
-        jornada.ingreso_bruto = ingreso_bruto
-        jornada.porcentaje_pago_conductor = porcentaje
-        jornada.kilometros_recorridos = campos_calculados["kilometros_recorridos"]
-        jornada.pago_conductor = campos_calculados["pago_conductor"]
-        jornada.save()
+        campos_calculados = (
+            calcular_campos_jornada(
+                jornada.kilometraje_inicial,
+                kilometraje_final,
+                ingreso_bruto,
+                porcentaje,
+                jornada.tipo_cobro,
+                jornada.monto_alquiler,
+            )
+        )
 
-        actualizar_kilometraje_vehiculo(jornada.vehiculo, jornada.kilometraje_final)
-        recalcular_totales_jornada(jornada)
+        estado_jornada_parqueado = (
+            self._obtener_estado_jornada(
+                codigo="parqueado",
+                nombre="Parqueado",
+            )
+        )
 
-        serializer = self.get_serializer(jornada)
-        return Response(serializer.data)
-    
+        estado_vehiculo_parqueado = (
+            self._obtener_estado_vehiculo(
+                codigo="parqueado",
+                nombre="Parqueado",
+            )
+        )
+
+        jornada.kilometraje_final = (
+            kilometraje_final
+        )
+
+        jornada.ingreso_bruto = (
+            ingreso_bruto
+        )
+
+        jornada.porcentaje_pago_conductor = (
+            porcentaje
+        )
+
+        jornada.estado = (
+            estado_jornada_parqueado
+        )
+
+        jornada.kilometros_recorridos = (
+            campos_calculados[
+                "kilometros_recorridos"
+            ]
+        )
+
+        jornada.pago_conductor = (
+            campos_calculados[
+                "pago_conductor"
+            ]
+        )
+
+        if (
+            request.data.get(
+                "observaciones"
+            )
+            is not None
+        ):
+            jornada.observaciones = (
+                request.data.get(
+                    "observaciones"
+                )
+            )
+
+        jornada.save(
+            update_fields=[
+                "kilometraje_final",
+                "ingreso_bruto",
+                "porcentaje_pago_conductor",
+                "estado",
+                "kilometros_recorridos",
+                "pago_conductor",
+                "observaciones",
+            ]
+        )
+
+        jornada.vehiculo.estado = (
+            estado_vehiculo_parqueado
+        )
+
+        jornada.vehiculo.save(
+            update_fields=[
+                "estado",
+            ]
+        )
+
+        actualizar_kilometraje_vehiculo(
+            jornada.vehiculo,
+            jornada.kilometraje_final,
+        )
+
+        recalcular_totales_jornada(
+            jornada
+        )
+
+        serializer = (
+            self.get_serializer(
+                jornada
+            )
+        )
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK,
+        )
+
     @action(
         detail=True,
         methods=["patch"],
         url_path="registrar-ingreso",
-        permission_classes=[EsAdminSucursalOSuperAdmin],
+        permission_classes=[
+            EsAdminSucursalOSuperAdmin
+        ],
     )
-    def registrar_ingreso(self, request, pk=None):
+    def registrar_ingreso(
+        self,
+        request,
+        pk=None,
+    ):
         jornada = self.get_object()
         user = request.user
+
         self._validar_jornada_no_liquidada(
             jornada
         )
 
-        if not es_superadmin(user) and not es_admin_sucursal(user):
-            raise PermissionDenied("Solo administración puede registrar el ingreso del día.")
+        if (
+            not es_superadmin(user)
+            and not es_admin_sucursal(user)
+        ):
+            raise PermissionDenied(
+                "Solo administración puede registrar "
+                "el ingreso del día."
+            )
 
         if es_admin_sucursal(user):
             if not user.sucursal:
-                raise ValidationError("Tu usuario no tiene una sucursal asignada.")
-
-            if jornada.sucursal_id != user.sucursal_id:
-                raise PermissionDenied("No puedes registrar ingresos de otra sucursal.")
-
-        if es_superadmin(user):
-            if jornada.sucursal_id is not None:
-                raise PermissionDenied(
-                    "No puedes registrar ingresos de una sucursal desde el panel superadmin."
+                raise ValidationError(
+                    "Tu usuario no tiene una sucursal asignada."
                 )
 
-        tipo_cobro = request.data.get("tipo_cobro", jornada.tipo_cobro or "porcentaje")
+            if (
+                jornada.sucursal_id
+                != user.sucursal_id
+            ):
+                raise PermissionDenied(
+                    "No puedes registrar ingresos "
+                    "de otra sucursal."
+                )
 
-        if tipo_cobro not in ["porcentaje", "alquiler"]:
+        if es_superadmin(user):
+            if (
+                jornada.sucursal_id
+                is not None
+            ):
+                raise PermissionDenied(
+                    "No puedes registrar ingresos de una "
+                    "sucursal desde el panel superadmin."
+                )
+
+        tipo_cobro = (
+            request.data.get(
+                "tipo_cobro",
+                jornada.tipo_cobro
+                or "porcentaje",
+            )
+        )
+
+        if tipo_cobro not in [
+            "porcentaje",
+            "alquiler",
+        ]:
             raise ValidationError({
-                "tipo_cobro": "El tipo de cobro debe ser porcentaje o alquiler."
+                "tipo_cobro": (
+                    "El tipo de cobro debe ser "
+                    "porcentaje o alquiler."
+                )
             })
 
-        ingreso_bruto = _decimal(request.data.get("ingreso_bruto"))
-        monto_alquiler = _decimal(request.data.get("monto_alquiler"))
+        ingreso_bruto = _decimal(
+            request.data.get(
+                "ingreso_bruto"
+            )
+        )
 
-        # Prioridad del %: body explicito > conductor.porcentaje_pago > config de sucursal.
-               # El porcentaje siempre sale del conductor.
-        # No se acepta porcentaje desde el frontend para evitar cálculos incorrectos.
-        porcentaje = self._resolver_porcentaje(jornada.conductor, jornada.sucursal)
+        monto_alquiler = _decimal(
+            request.data.get(
+                "monto_alquiler"
+            )
+        )
+
+        porcentaje = (
+            self._resolver_porcentaje(
+                jornada.conductor,
+                jornada.sucursal,
+            )
+        )
 
         if tipo_cobro == "porcentaje":
             if ingreso_bruto < 0:
                 raise ValidationError({
-                    "ingreso_bruto": "El ingreso del día no puede ser negativo."
+                    "ingreso_bruto": (
+                        "El ingreso del día no puede ser negativo."
+                    )
                 })
 
-            jornada.ingreso_bruto = ingreso_bruto
-            jornada.monto_alquiler = Decimal("0.00")
-            jornada.porcentaje_pago_conductor = porcentaje
+            jornada.ingreso_bruto = (
+                ingreso_bruto
+            )
 
-        if tipo_cobro == "alquiler":
+            jornada.monto_alquiler = (
+                Decimal("0.00")
+            )
+
+            jornada.porcentaje_pago_conductor = (
+                porcentaje
+            )
+
+        elif tipo_cobro == "alquiler":
             if monto_alquiler < 0:
                 raise ValidationError({
-                    "monto_alquiler": "El monto de alquiler no puede ser negativo."
+                    "monto_alquiler": (
+                        "El monto de alquiler no "
+                        "puede ser negativo."
+                    )
                 })
 
-            jornada.ingreso_bruto = monto_alquiler
-            jornada.monto_alquiler = monto_alquiler
-            jornada.porcentaje_pago_conductor = Decimal("0.00")
+            jornada.ingreso_bruto = (
+                monto_alquiler
+            )
 
-        jornada.tipo_cobro = tipo_cobro
+            jornada.monto_alquiler = (
+                monto_alquiler
+            )
 
-        if request.data.get("observaciones") is not None:
-            jornada.observaciones = request.data.get("observaciones")
+            jornada.porcentaje_pago_conductor = (
+                Decimal("0.00")
+            )
 
-        campos_calculados = calcular_campos_jornada(
-            jornada.kilometraje_inicial,
-            jornada.kilometraje_final,
-            jornada.ingreso_bruto,
-            jornada.porcentaje_pago_conductor,
-            jornada.tipo_cobro,
-            jornada.monto_alquiler,
+        jornada.tipo_cobro = (
+            tipo_cobro
         )
 
-        jornada.kilometros_recorridos = campos_calculados["kilometros_recorridos"]
-        jornada.pago_conductor = campos_calculados["pago_conductor"]
-        jornada.ingreso_bruto = campos_calculados["ingreso_bruto"]
+        if (
+            request.data.get(
+                "observaciones"
+            )
+            is not None
+        ):
+            jornada.observaciones = (
+                request.data.get(
+                    "observaciones"
+                )
+            )
 
-        jornada.save()
-        recalcular_totales_jornada(jornada)
+        campos_calculados = (
+            calcular_campos_jornada(
+                jornada.kilometraje_inicial,
+                jornada.kilometraje_final,
+                jornada.ingreso_bruto,
+                jornada.porcentaje_pago_conductor,
+                jornada.tipo_cobro,
+                jornada.monto_alquiler,
+            )
+        )
 
-        serializer = self.get_serializer(jornada)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        jornada.kilometros_recorridos = (
+            campos_calculados[
+                "kilometros_recorridos"
+            ]
+        )
 
+        jornada.pago_conductor = (
+            campos_calculados[
+                "pago_conductor"
+            ]
+        )
+
+        jornada.ingreso_bruto = (
+            campos_calculados[
+                "ingreso_bruto"
+            ]
+        )
+
+        jornada.save(
+            update_fields=[
+                "tipo_cobro",
+                "ingreso_bruto",
+                "monto_alquiler",
+                "porcentaje_pago_conductor",
+                "kilometros_recorridos",
+                "pago_conductor",
+                "observaciones",
+            ]
+        )
+
+        recalcular_totales_jornada(
+            jornada
+        )
+
+        serializer = (
+            self.get_serializer(
+                jornada
+            )
+        )
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK,
+        )
 
 class GastoViewSet(viewsets.ModelViewSet):
     serializer_class = GastoSerializer
@@ -2172,6 +2964,277 @@ class AdelantoViewSet(viewsets.ModelViewSet):
             return qs.filter(sucursal=user.sucursal, conductor__usuario=user)
 
         return qs.none()
+
+    @action(
+    detail=False,
+    methods=["get"],
+    url_path="resumen-conductores",
+    )
+    def resumen_conductores(
+                self,
+            request,
+        ):
+            """
+            Devuelve una sola fila por conductor con:
+
+            - Total de adelantos.
+            - Total de abonos.
+            - Saldo pendiente.
+            - Cantidad de movimientos.
+            - Fecha del último movimiento.
+
+            Los movimientos originales no se eliminan ni se combinan.
+            """
+
+            qs = (
+                self.get_queryset()
+                .filter(
+                    conductor__isnull=False
+                )
+            )
+
+            conductor_id = (
+                request.query_params.get(
+                    "conductor"
+                )
+            )
+
+            estado_saldo = str(
+                request.query_params.get(
+                    "estado_saldo",
+                    "todos",
+                )
+            ).strip().lower()
+
+            if conductor_id:
+                qs = qs.filter(
+                    conductor_id=conductor_id
+                )
+
+            filtro_abonos = Q(
+                estado__codigo__in=[
+                    "abono",
+                    "abonado",
+                ]
+            )
+
+            filtro_adelantos = (
+                Q(
+                    estado__codigo__in=[
+                        "adelanto",
+                        "anticipo",
+                    ]
+                )
+                |
+                Q(
+                    estado__codigo__isnull=True
+                )
+            )
+
+            campo_dinero = DecimalField(
+                max_digits=14,
+                decimal_places=2,
+            )
+
+            resumen = (
+                qs.values(
+                    "conductor_id",
+                    "conductor__nombre",
+                    "conductor__apellido",
+                    "conductor__cedula",
+                    "conductor__sucursal_id",
+                    "conductor__sucursal__nombre",
+                )
+                .annotate(
+                    total_adelantos=Coalesce(
+                        Sum(
+                            "monto",
+                            filter=filtro_adelantos,
+                        ),
+                        Value(
+                            Decimal("0.00")
+                        ),
+                        output_field=campo_dinero,
+                    ),
+
+                    total_abonos=Coalesce(
+                        Sum(
+                            "monto",
+                            filter=filtro_abonos,
+                        ),
+                        Value(
+                            Decimal("0.00")
+                        ),
+                        output_field=campo_dinero,
+                    ),
+
+                    cantidad_adelantos=Count(
+                        "id",
+                        filter=filtro_adelantos,
+                    ),
+
+                    cantidad_abonos=Count(
+                        "id",
+                        filter=filtro_abonos,
+                    ),
+
+                    cantidad_movimientos=Count(
+                        "id"
+                    ),
+
+                    ultimo_movimiento=Max(
+                        "fecha"
+                    ),
+                )
+            )
+
+            resultado = []
+
+            for item in resumen:
+                total_adelantos = Decimal(
+                    item.get(
+                        "total_adelantos"
+                    )
+                    or "0.00"
+                ).quantize(
+                    Decimal("0.01")
+                )
+
+                total_abonos = Decimal(
+                    item.get(
+                        "total_abonos"
+                    )
+                    or "0.00"
+                ).quantize(
+                    Decimal("0.01")
+                )
+
+                saldo_calculado = (
+                    total_adelantos
+                    - total_abonos
+                ).quantize(
+                    Decimal("0.01")
+                )
+
+                saldo_pendiente = max(
+                    saldo_calculado,
+                    Decimal("0.00"),
+                )
+
+                saldo_a_favor = max(
+                    -saldo_calculado,
+                    Decimal("0.00"),
+                )
+
+                if (
+                    estado_saldo
+                    in {
+                        "pendiente",
+                        "con_saldo",
+                    }
+                    and saldo_pendiente
+                    <= Decimal("0.00")
+                ):
+                    continue
+
+                if (
+                    estado_saldo
+                    in {
+                        "cancelado",
+                        "cancelados",
+                        "sin_saldo",
+                    }
+                    and saldo_pendiente
+                    > Decimal("0.00")
+                ):
+                    continue
+
+                nombre = (
+                    f"{item.get('conductor__nombre') or ''} "
+                    f"{item.get('conductor__apellido') or ''}"
+                ).strip()
+
+                resultado.append({
+                    "conductor_id":
+                        item["conductor_id"],
+
+                    "conductor_nombre":
+                        nombre,
+
+                    "conductor_cedula":
+                        item.get(
+                            "conductor__cedula"
+                        )
+                        or "",
+
+                    "sucursal_id":
+                        item.get(
+                            "conductor__sucursal_id"
+                        ),
+
+                    "sucursal_nombre":
+                        item.get(
+                            "conductor__sucursal__nombre"
+                        )
+                        or "Sin sucursal",
+
+                    "total_adelantos":
+                        str(total_adelantos),
+
+                    "total_abonos":
+                        str(total_abonos),
+
+                    "saldo_pendiente":
+                        str(saldo_pendiente),
+
+                    "saldo_a_favor":
+                        str(saldo_a_favor),
+
+                    "cantidad_adelantos":
+                        item.get(
+                            "cantidad_adelantos"
+                        )
+                        or 0,
+
+                    "cantidad_abonos":
+                        item.get(
+                            "cantidad_abonos"
+                        )
+                        or 0,
+
+                    "cantidad_movimientos":
+                        item.get(
+                            "cantidad_movimientos"
+                        )
+                        or 0,
+
+                    "ultimo_movimiento":
+                        item.get(
+                            "ultimo_movimiento"
+                        ),
+
+                    "tiene_saldo":
+                        saldo_pendiente
+                        > Decimal("0.00"),
+                })
+
+            resultado.sort(
+                key=lambda item: (
+                    -Decimal(
+                        item[
+                            "saldo_pendiente"
+                        ]
+                    ),
+                    item[
+                        "conductor_nombre"
+                    ].lower(),
+                )
+            )
+
+            return Response({
+                "count": len(resultado),
+                "results": resultado,
+            })
 
     def _resolver_estado(self, tipo, estado_actual=None):
         tipo_limpio = str(tipo or "").strip().upper()
@@ -3221,11 +4284,12 @@ class DashboardFinancieroView(APIView):
             mantenimiento = mantenimiento_map.get(key, Decimal("0.00"))
             gastos_operativos = gastos + mantenimiento
 
-            ganancia_real = ingresos_data["ganancia_base"] - gastos_operativos
-
-            if ganancia_real < Decimal("0.00"):
-                ganancia_real = Decimal("0.00")
-
+            ganancia_real = (
+                    ingresos_data["ganancia_base"]
+                    - gastos_operativos
+                ).quantize(
+                    Decimal("0.01")
+)
             data.append(
                 {
                     "mes": key,

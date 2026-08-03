@@ -1,6 +1,7 @@
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin
+from .api.services import procesar_liquidacion_manual
 
 from .models import (
     Sucursal,
@@ -24,7 +25,7 @@ from .models import (
     Liquidacion,
   
 )
-from .api.services import procesar_liquidacion_manual
+
 
 class LiquidacionAdminForm(forms.ModelForm):
     liquidar = forms.BooleanField(
@@ -108,29 +109,41 @@ class LiquidacionAdmin(admin.ModelAdmin):
             change,
         )
 
-        if not form.cleaned_data.get(
-            "liquidar"
-        ):
+        if not form.cleaned_data.get("liquidar"):
             return
 
-        resultado = (
-            procesar_liquidacion_manual(
+        try:
+            resultado = procesar_liquidacion_manual(
                 liquidacion=obj,
                 usuario=request.user,
             )
-        )
 
-        nivel = (
-            messages.SUCCESS
-            if resultado["procesada"]
-            else messages.WARNING
-        )
+            obj.refresh_from_db()
 
-        self.message_user(
-            request,
-            resultado["mensaje"],
-            level=nivel,
-        )
+            nivel = (
+                messages.SUCCESS
+                if resultado.get("procesada")
+                else messages.WARNING
+            )
+
+            self.message_user(
+                request,
+                resultado.get(
+                    "mensaje",
+                    "El proceso de liquidación terminó.",
+                ),
+                level=nivel,
+            )
+
+        except Exception as error:
+            self.message_user(
+                request,
+                (
+                    f"No se pudo procesar la liquidación. "
+                    f"{type(error).__name__}: {error}"
+                ),
+                level=messages.ERROR,
+            )
 
 @admin.register(Usuario)
 class UsuarioAdmin(UserAdmin):

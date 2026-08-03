@@ -15,9 +15,7 @@ from App_taxi.models import (
     TipoMantenimiento,
     Vehiculo,
 )
-from App_taxi.notification_services import (
-    procesar_alerta_aceite_conductor,
-)
+
 
 
 logger = logging.getLogger(__name__)

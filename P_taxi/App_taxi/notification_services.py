@@ -359,6 +359,7 @@ def procesar_alerta_aceite_conductor(
         settings,
         "FRONTEND_MANTENIMIENTO_URL",
         "/mantenimiento",
+        "/mi-vehiculo",
     )
 
     enviados = enviar_notificacion_usuario(
