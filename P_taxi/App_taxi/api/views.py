@@ -4117,6 +4117,20 @@ class ReporteFinancieroView(APIView):
         ).strip()
 
         return nombre or f"Vehículo #{vehiculo.pk}"
+    def _nombre_conductor(self, conductor):
+        if not conductor:
+            return "Sin conductor"
+
+        nombre = " ".join(
+            parte
+            for parte in [
+                conductor.nombre,
+                conductor.apellido,
+            ]
+            if parte
+        ).strip()
+
+        return nombre or f"Conductor #{conductor.pk}"
 
     def get(self, request):
         user = request.user
@@ -4137,7 +4151,8 @@ class ReporteFinancieroView(APIView):
             )
 
         jornadas = JornadaDiaria.objects.select_related(
-            "vehiculo"
+            "vehiculo",
+            "conductor",
         ).all()
 
         gastos = Gasto.objects.select_related(
@@ -4401,6 +4416,55 @@ class ReporteFinancieroView(APIView):
                 item["vehiculo"] or ""
             ).lower()
         )
+        
+        detalle_jornadas = []
+
+        for jornada in jornadas.order_by(
+            "-fecha",
+            "-id",
+        ):
+            detalle_jornadas.append(
+                {
+                    "jornada_id": jornada.pk,
+                    "fecha": str(jornada.fecha),
+                    "vehiculo_id": jornada.vehiculo_id,
+                    "vehiculo": self._nombre_vehiculo(
+                        jornada.vehiculo
+                    ),
+                    "conductor_id": jornada.conductor_id,
+                    "conductor": self._nombre_conductor(
+                        jornada.conductor
+                    ),
+                    "tipo_cobro": jornada.tipo_cobro,
+                    "tipo_cobro_nombre": (
+                        jornada.get_tipo_cobro_display()
+                    ),
+                    "kilometraje_inicial": (
+                        jornada.kilometraje_inicial
+                    ),
+                    "kilometraje_final": (
+                        jornada.kilometraje_final
+                    ),
+                    "kilometros": (
+                        jornada.kilometros_recorridos
+                    ),
+                    "ingreso_bruto": (
+                        jornada.ingreso_bruto
+                    ),
+                    "monto_alquiler": (
+                        jornada.monto_alquiler
+                    ),
+                    "pago_conductor": (
+                        jornada.pago_conductor
+                    ),
+                    "adelantos": (
+                        jornada.total_adelantos
+                    ),
+                    "ganancia_dueno": (
+                        jornada.ganancia_dueno
+                    ),
+                }
+            )
 
         return Response(
             {
@@ -4447,8 +4511,10 @@ class ReporteFinancieroView(APIView):
                 "detalle_por_vehiculo": (
                     detalle_por_vehiculo
                 ),
+                "detalle_jornadas": detalle_jornadas,
             }
         )
+
 
 
 class ReporteFinancieroExcelView(
@@ -4470,13 +4536,14 @@ class ReporteFinancieroExcelView(
 
         libro = Workbook()
         hoja = libro.active
-        hoja.title = "Reporte por vehículo"
+        hoja.title = "Reporte financiero"
 
         color_amarillo = "F5B800"
         color_amarillo_claro = "FFF4CF"
         color_azul = "1D4ED8"
         color_verde = "059669"
         color_rojo = "DC2626"
+        color_naranja = "EA580C"
         color_gris = "F1F5F9"
         color_texto = "0F172A"
         color_borde = "CBD5E1"
@@ -4500,7 +4567,7 @@ class ReporteFinancieroExcelView(
             ),
         )
 
-        hoja.merge_cells("A1:J1")
+        hoja.merge_cells("A1:I1")
 
         celda_titulo = hoja["A1"]
         celda_titulo.value = (
@@ -4522,7 +4589,7 @@ class ReporteFinancieroExcelView(
 
         hoja.row_dimensions[1].height = 30
 
-        hoja.merge_cells("A2:J2")
+        hoja.merge_cells("A2:I2")
 
         celda_periodo = hoja["A2"]
         celda_periodo.value = (
@@ -4541,20 +4608,26 @@ class ReporteFinancieroExcelView(
         )
         celda_periodo.alignment = Alignment(
             horizontal="center",
+            vertical="center",
         )
 
-        hoja["A4"] = "RESUMEN GENERAL"
-        hoja["A4"].font = Font(
+        hoja.merge_cells("A4:B4")
+
+        celda_resumen = hoja["A4"]
+        celda_resumen.value = "RESUMEN GENERAL"
+        celda_resumen.font = Font(
             bold=True,
             size=12,
             color="FFFFFF",
         )
-        hoja["A4"].fill = PatternFill(
+        celda_resumen.fill = PatternFill(
             "solid",
             fgColor=color_azul,
         )
-
-        hoja.merge_cells("A4:B4")
+        celda_resumen.alignment = Alignment(
+            horizontal="left",
+            vertical="center",
+        )
 
         resumen = [
             (
@@ -4574,6 +4647,30 @@ class ReporteFinancieroExcelView(
                 color_azul,
             ),
             (
+                "Ganancia del dueño",
+                reporte.get(
+                    "total_ganancia_dueno",
+                    0,
+                ),
+                color_amarillo,
+            ),
+            (
+                "Gastos de vehículos",
+                reporte.get(
+                    "total_gastos_vehiculos",
+                    0,
+                ),
+                color_rojo,
+            ),
+            (
+                "Mantenimiento",
+                reporte.get(
+                    "total_mantenimiento",
+                    0,
+                ),
+                color_naranja,
+            ),
+            (
                 "Gastos operativos",
                 reporte.get(
                     "total_gastos_operativos",
@@ -4587,47 +4684,42 @@ class ReporteFinancieroExcelView(
                     "total_ganancia_real_dueno",
                     0,
                 ),
-                color_amarillo,
+                color_verde,
             ),
         ]
 
         fila_resumen = 5
 
         for etiqueta, valor, color in resumen:
-            hoja.cell(
+            celda_etiqueta = hoja.cell(
                 fila_resumen,
                 1,
                 etiqueta,
             )
 
-            hoja.cell(
+            celda_valor = hoja.cell(
                 fila_resumen,
                 2,
                 float(valor or 0),
             )
 
-            hoja.cell(
-                fila_resumen,
-                1,
-            ).font = Font(
+            celda_etiqueta.font = Font(
                 bold=True,
                 color=color_texto,
             )
 
-            hoja.cell(
-                fila_resumen,
-                2,
-            ).font = Font(
+            celda_etiqueta.fill = PatternFill(
+                "solid",
+                fgColor=color_gris,
+            )
+
+            celda_valor.font = Font(
                 bold=True,
                 color=color,
             )
 
-            hoja.cell(
-                fila_resumen,
-                1,
-            ).fill = PatternFill(
-                "solid",
-                fgColor=color_gris,
+            celda_valor.number_format = (
+                '"C$" #,##0.00'
             )
 
             for columna in [1, 2]:
@@ -4636,28 +4728,21 @@ class ReporteFinancieroExcelView(
                     columna,
                 ).border = borde_fino
 
-            hoja.cell(
-                fila_resumen,
-                2,
-            ).number_format = (
-                '"C$" #,##0.00'
-            )
-
             fila_resumen += 1
 
-        fila_tabla = 11
+        fila_tabla = 14
 
         hoja.merge_cells(
             start_row=fila_tabla,
             start_column=1,
             end_row=fila_tabla,
-            end_column=10,
+            end_column=9,
         )
 
         titulo_tabla = hoja.cell(
             fila_tabla,
             1,
-            "DETALLE ORDENADO POR VEHÍCULO",
+            "DETALLE DE JORNADAS ORDENADO POR FECHA",
         )
 
         titulo_tabla.font = Font(
@@ -4673,19 +4758,18 @@ class ReporteFinancieroExcelView(
 
         titulo_tabla.alignment = Alignment(
             horizontal="center",
+            vertical="center",
         )
 
         encabezados = [
+            "Fecha",
             "Vehículo",
-            "Jornadas",
+            "Conductor",
+            "Tipo de cobro",
             "Kilómetros",
-            "Ingresos",
+            "Ingreso",
             "Pago conductor",
             "Ganancia dueño",
-            "Gastos",
-            "Mantenimiento",
-            "Gastos operativos",
-            "Ganancia real",
         ]
 
         fila_encabezados = fila_tabla + 1
@@ -4720,47 +4804,54 @@ class ReporteFinancieroExcelView(
 
         fila_datos = fila_encabezados + 1
 
-        detalle = reporte.get(
-            "detalle_por_vehiculo",
+        detalle_jornadas = reporte.get(
+            "detalle_jornadas",
             [],
         )
 
-        for item in detalle:
+        total_kilometros = sum(
+            int(
+                item.get(
+                    "kilometros",
+                    0,
+                ) or 0
+            )
+            for item in detalle_jornadas
+        )
+
+        for item in detalle_jornadas:
             datos = [
+                item.get("fecha", "-"),
                 item.get("vehiculo", "-"),
-                item.get("jornadas", 0),
-                item.get("kilometros", 0),
-                float(item.get("ingresos", 0)),
+                item.get("conductor", "-"),
+                item.get(
+                    "tipo_cobro_nombre",
+                    "-",
+                ),
+                int(
+                    item.get(
+                        "kilometros",
+                        0,
+                    ) or 0
+                ),
                 float(
                     item.get(
-                        "pago_conductores",
+                        "ingreso_bruto",
                         0,
-                    )
+                    ) or 0
                 ),
+                float(
+                    item.get(
+                        "pago_conductor",
+                        0,
+                    ) or 0
+                ),
+              
                 float(
                     item.get(
                         "ganancia_dueno",
                         0,
-                    )
-                ),
-                float(item.get("gastos", 0)),
-                float(
-                    item.get(
-                        "mantenimiento",
-                        0,
-                    )
-                ),
-                float(
-                    item.get(
-                        "gastos_operativos",
-                        0,
-                    )
-                ),
-                float(
-                    item.get(
-                        "ganancia_real",
-                        0,
-                    )
+                    ) or 0
                 ),
             ]
 
@@ -4779,56 +4870,186 @@ class ReporteFinancieroExcelView(
                 celda.alignment = Alignment(
                     horizontal=(
                         "left"
-                        if columna == 1
+                        if columna <= 4
                         else "right"
                     ),
                     vertical="center",
                 )
 
-                if columna >= 4:
+                if columna >= 6:
                     celda.number_format = (
                         '"C$" #,##0.00'
                     )
 
-            ganancia_celda = hoja.cell(
+            hoja.cell(
                 fila_datos,
-                10,
+                6,
+            ).font = Font(
+                bold=True,
+                color=color_verde,
             )
 
-            if float(
-                item.get(
-                    "ganancia_real",
-                    0,
-                )
-            ) < 0:
-                ganancia_celda.font = Font(
-                    bold=True,
-                    color=color_rojo,
-                )
-            else:
-                ganancia_celda.font = Font(
-                    bold=True,
-                    color=color_verde,
-                )
+            hoja.cell(
+                fila_datos,
+                7,
+            ).font = Font(
+                bold=True,
+                color=color_azul,
+            )
+
+            hoja.cell(
+                fila_datos,
+                8,
+            ).font = Font(
+                bold=True,
+                color=color_rojo,
+            )
+
+            hoja.cell(
+                fila_datos,
+                9,
+            ).font = Font(
+                bold=True,
+                color=color_amarillo,
+            )
 
             fila_datos += 1
 
-        if not detalle:
+        if detalle_jornadas:
             hoja.merge_cells(
                 start_row=fila_datos,
                 start_column=1,
                 end_row=fila_datos,
-                end_column=10,
+                end_column=4,
+            )
+
+            celda_total = hoja.cell(
+                fila_datos,
+                1,
+                "TOTALES DEL PERÍODO",
+            )
+
+            celda_total.font = Font(
+                bold=True,
+                color="FFFFFF",
+            )
+
+            celda_total.fill = PatternFill(
+                "solid",
+                fgColor=color_azul,
+            )
+
+            celda_total.alignment = Alignment(
+                horizontal="right",
+                vertical="center",
+            )
+
+            hoja.cell(
+                fila_datos,
+                5,
+                total_kilometros,
+            )
+
+            hoja.cell(
+                fila_datos,
+                6,
+                float(
+                    reporte.get(
+                        "total_ingresos",
+                        0,
+                    ) or 0
+                ),
+            )
+
+            hoja.cell(
+                fila_datos,
+                7,
+                float(
+                    reporte.get(
+                        "total_pago_conductores",
+                        0,
+                    ) or 0
+                ),
+            )
+
+            hoja.cell(
+                fila_datos,
+                8,
+                float(
+                    reporte.get(
+                        "total_adelantos",
+                        0,
+                    ) or 0
+                ),
+            )
+
+            hoja.cell(
+                fila_datos,
+                9,
+                float(
+                    reporte.get(
+                        "total_ganancia_dueno",
+                        0,
+                    ) or 0
+                ),
+            )
+
+            for columna in range(1, 10):
+                celda = hoja.cell(
+                    fila_datos,
+                    columna,
+                )
+
+                celda.border = borde_fino
+
+                if columna >= 5:
+                    celda.fill = PatternFill(
+                        "solid",
+                        fgColor=color_gris,
+                    )
+
+                    celda.font = Font(
+                        bold=True,
+                        color=(
+                            color_verde
+                            if columna == 6
+                            else color_azul
+                            if columna == 7
+                            else color_rojo
+                            if columna == 8
+                            else color_amarillo
+                            if columna == 9
+                            else color_texto
+                        ),
+                    )
+
+                    celda.alignment = Alignment(
+                        horizontal="right",
+                        vertical="center",
+                    )
+
+                if columna >= 6:
+                    celda.number_format = (
+                        '"C$" #,##0.00'
+                    )
+
+        else:
+            hoja.merge_cells(
+                start_row=fila_datos,
+                start_column=1,
+                end_row=fila_datos,
+                end_column=9,
             )
 
             celda_vacia = hoja.cell(
                 fila_datos,
                 1,
-                "No hay registros para los filtros seleccionados.",
+                "No hay jornadas para los filtros seleccionados.",
             )
 
             celda_vacia.alignment = Alignment(
                 horizontal="center",
+                vertical="center",
             )
 
             celda_vacia.font = Font(
@@ -4837,16 +5058,15 @@ class ReporteFinancieroExcelView(
             )
 
         anchos = {
-            "A": 30,
-            "B": 12,
-            "C": 14,
-            "D": 16,
-            "E": 18,
-            "F": 18,
-            "G": 16,
-            "H": 18,
-            "I": 20,
-            "J": 17,
+            "A": 14,
+            "B": 30,
+            "C": 26,
+            "D": 17,
+            "E": 14,
+            "F": 17,
+            "G": 19,
+            "H": 16,
+            "I": 19,
         }
 
         for columna, ancho in anchos.items():
@@ -4854,9 +5074,15 @@ class ReporteFinancieroExcelView(
                 columna
             ].width = ancho
 
-        hoja.freeze_panes = "A13"
+        hoja.freeze_panes = "A16"
 
         hoja.sheet_view.showGridLines = False
+
+        hoja.page_setup.orientation = "landscape"
+        hoja.page_setup.fitToWidth = 1
+        hoja.page_setup.fitToHeight = 0
+
+        hoja.sheet_properties.pageSetUpPr.fitToPage = True
 
         respuesta = HttpResponse(
             content_type=(
@@ -5650,6 +5876,60 @@ class PaginacionAuditoria(PageNumberPagination):
 class AuditoriaView(APIView):
     permission_classes = [IsAuthenticated]
 
+    EVENTOS_MANUALES = {
+        "reporte_consultado": {
+            "accion": "consulta",
+            "modulo": "Reportes",
+            "descripcion": "Consultó el reporte financiero.",
+        },
+        "reporte_excel_descargado": {
+            "accion": "descarga",
+            "modulo": "Reportes",
+            "descripcion": "Descargó el reporte financiero en Excel.",
+        },
+        "recibo_abierto": {
+            "accion": "consulta",
+            "modulo": "Liquidaciones",
+            "descripcion": "Abrió el recibo de una liquidación.",
+        },
+        "recibo_pdf_descargado": {
+            "accion": "descarga",
+            "modulo": "Liquidaciones",
+            "descripcion": "Descargó el PDF del recibo de liquidación.",
+        },
+        "recibo_impreso": {
+            "accion": "impresion",
+            "modulo": "Liquidaciones",
+            "descripcion": "Mandó a imprimir el recibo de liquidación.",
+        },
+        "recibo_compartido": {
+            "accion": "compartir",
+            "modulo": "Liquidaciones",
+            "descripcion": "Compartió el PDF del recibo de liquidación.",
+        },
+        "whatsapp_abierto": {
+            "accion": "whatsapp",
+            "modulo": "Liquidaciones",
+            "descripcion": "Abrió WhatsApp para enviar una liquidación.",
+        },
+        "plantilla_whatsapp_guardada": {
+            "accion": "configuracion",
+            "modulo": "Liquidaciones",
+            "descripcion": (
+                "Actualizó la plantilla de mensaje "
+                "para liquidaciones por WhatsApp."
+            ),
+        },
+        "plantilla_whatsapp_restaurada": {
+            "accion": "configuracion",
+            "modulo": "Liquidaciones",
+            "descripcion": (
+                "Restauró la plantilla predeterminada "
+                "de WhatsApp para liquidaciones."
+            ),
+        },
+    }
+
     def get(self, request):
         usuario = request.user
 
@@ -5681,30 +5961,12 @@ class AuditoriaView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        fecha_inicio = request.query_params.get(
-            "fecha_inicio"
-        )
-
-        fecha_fin = request.query_params.get(
-            "fecha_fin"
-        )
-
-        usuario_id = request.query_params.get(
-            "usuario"
-        )
-
-        accion = request.query_params.get(
-            "accion"
-        )
-
-        modulo = request.query_params.get(
-            "modulo"
-        )
-
-        buscar = request.query_params.get(
-            "buscar",
-            "",
-        ).strip()
+        fecha_inicio = request.query_params.get("fecha_inicio")
+        fecha_fin = request.query_params.get("fecha_fin")
+        usuario_id = request.query_params.get("usuario")
+        accion = request.query_params.get("accion")
+        modulo = request.query_params.get("modulo")
+        buscar = request.query_params.get("buscar", "").strip()
 
         if fecha_inicio:
             movimientos = movimientos.filter(
@@ -5754,4 +6016,49 @@ class AuditoriaView(APIView):
 
         return paginador.get_paginated_response(
             serializer.data
+        )
+
+    def post(self, request):
+        evento = str(
+            request.data.get("evento", "")
+        ).strip()
+
+        referencia = str(
+            request.data.get("referencia", "")
+        ).strip()[:250]
+
+        configuracion = self.EVENTOS_MANUALES.get(evento)
+
+        if not configuracion:
+            return Response(
+                {
+                    "detail": "El evento de auditoría no es válido."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        descripcion = configuracion["descripcion"]
+
+        if referencia:
+            descripcion = f"{descripcion} {referencia}"
+
+        movimiento = MovimientoAuditoria.objects.create(
+            usuario=request.user,
+            sucursal=getattr(
+                request.user,
+                "sucursal",
+                None,
+            ),
+            accion=configuracion["accion"],
+            modulo=configuracion["modulo"],
+            descripcion=descripcion,
+        )
+
+        serializer = MovimientoAuditoriaSerializer(
+            movimiento
+        )
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED,
         )
