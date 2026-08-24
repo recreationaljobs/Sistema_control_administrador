@@ -193,12 +193,23 @@ class Conductor(models.Model):
     fecha_inicio_licencia = models.DateField(blank=True, null=True)
     fecha_vencimiento_licencia = models.DateField(blank=True, null=True)
 
+    TIPO_COBRO_CHOICES = [
+        ("porcentaje", "Porcentaje"),
+        ("alquiler", "Alquiler"),
+    ]
+
+    tipo_cobro = models.CharField(
+        max_length=20,
+        choices=TIPO_COBRO_CHOICES,
+        default="porcentaje",
+    )
+
     porcentaje_pago = models.DecimalField(
         max_digits=5,
         decimal_places=2,
         default=Decimal("30.00"),
         validators=[
-            MinValueValidator(Decimal("0.00")),
+            MinValueValidator(Decimal("0")),
             MaxValueValidator(Decimal("100.00"))
         ]
     )
@@ -1146,4 +1157,89 @@ class DocumentoVehiculo(models.Model):
             f"{self.get_tipo_documento_display()} - "
             f"{self.vehiculo.numero} - "
             f"{self.vehiculo.placa}"
+        )
+
+
+class MovimientoAuditoria(models.Model):
+    ACCION_CREAR = "crear"
+    ACCION_EDITAR = "editar"
+    ACCION_ELIMINAR = "eliminar"
+    ACCION_ACCESO = "acceso"
+    ACCION_CIERRE_SESION = "cierre_sesion"
+
+    ACCIONES = [
+        (ACCION_CREAR, "Creación"),
+        (ACCION_EDITAR, "Edición"),
+        (ACCION_ELIMINAR, "Eliminación"),
+        (ACCION_ACCESO, "Inicio de sesión"),
+        (ACCION_CIERRE_SESION, "Cierre de sesión"),
+    ]
+
+    usuario = models.ForeignKey(
+        Usuario,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="movimientos_auditoria",
+    )
+
+    sucursal = models.ForeignKey(
+        Sucursal,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="movimientos_auditoria",
+    )
+
+    accion = models.CharField(
+        max_length=20,
+        choices=ACCIONES,
+    )
+
+    modulo = models.CharField(max_length=100)
+
+    descripcion = models.TextField()
+
+    objeto_id = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+    )
+
+    datos_anteriores = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    datos_nuevos = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    direccion_ip = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+    )
+
+    fecha = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        verbose_name = "Movimiento de auditoría"
+        verbose_name_plural = "Movimientos de auditoría"
+        ordering = ["-fecha"]
+        indexes = [
+            models.Index(fields=["-fecha"]),
+            models.Index(fields=["usuario", "-fecha"]),
+            models.Index(fields=["sucursal", "-fecha"]),
+            models.Index(fields=["modulo", "-fecha"]),
+        ]
+
+    def __str__(self):
+        usuario = self.usuario.username if self.usuario else "Sistema"
+
+        return (
+            f"{self.get_accion_display()} | "
+            f"{self.modulo} | "
+            f"{usuario}"
         )

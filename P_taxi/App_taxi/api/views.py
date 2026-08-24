@@ -1,23 +1,35 @@
 from decimal import Decimal, InvalidOperation
 import logging
-from django.contrib.auth import authenticate
-from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import transaction
-from django.db.models import Prefetch, Q, Sum, DecimalField ,Count,Max
-from django.db.models.functions import Coalesce
-from django.db.models import Value
-from django.utils import timezone
-from django.utils.dateparse import parse_date
+from django.contrib.auth import authenticate  # type: ignore[reportMissingModuleSource]
+from django.core.exceptions import ValidationError as DjangoValidationError  # type: ignore[reportMissingModuleSource]
+from django.db import transaction   # type: ignore[reportMissingModuleSource]
+from django.db.models import Prefetch, Q, Sum, DecimalField ,Count,Max # type: ignore[reportMissingModuleSource]
+from django.db.models.functions import Coalesce # type: ignore[reportMissingModuleSource]
+from django.db.models import Value # type: ignore[reportMissingModuleSource]
+from django.utils import timezone # type: ignore[reportMissingModuleSource]
+from django.utils.dateparse import parse_date # type: ignore[reportMissingModuleSource]
+from django.http import HttpResponse # type: ignore[reportMissingModuleSource]
+from rest_framework.pagination import PageNumberPagination # type: ignore[reportMissingModuleSource]
+
+from openpyxl import Workbook # type: ignore[reportMissingModuleSource]
+from openpyxl.styles import ( # type: ignore[reportMissingModuleSource]
+    Alignment,
+    Border,
+    Font,
+    PatternFill,
+    Side,
+)
+from openpyxl.utils import get_column_letter # type: ignore[reportMissingModuleSource]
 
 
-from rest_framework import status, viewsets
-from django.db.models.functions import TruncMonth
-from rest_framework.authtoken.models import Token
-from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
-from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.response import Response
-from rest_framework.views import APIView
+from rest_framework import status, viewsets # type: ignore[reportMissingModuleSource]
+from django.db.models.functions import TruncMonth   # type: ignore[reportMissingModuleSource]
+from rest_framework.authtoken.models import Token   # type: ignore[reportMissingModuleSource]
+from rest_framework.decorators import action    # type: ignore[reportMissingModuleSource]
+from rest_framework.exceptions import PermissionDenied, ValidationError # type: ignore[reportMissingModuleSource]
+from rest_framework.permissions import AllowAny, IsAuthenticated    # type: ignore[reportMissingModuleSource]
+from rest_framework.response import Response    # type: ignore[reportMissingModuleSource]
+from rest_framework.views import APIView    # type: ignore[reportMissingModuleSource]
 from App_taxi.models import (
     DispositivoNotificacion,
 )
@@ -48,6 +60,7 @@ from ..models import (
     ConfiguracionSistema,
     Liquidacion,
     DetalleLiquidacion,
+    MovimientoAuditoria,
 )
 
 from .serializers import (
@@ -70,10 +83,11 @@ from .serializers import (
     AdelantoSerializer,
     MantenimientoSerializer,
     ConfiguracionSistemaSerializer,
+    MovimientoAuditoriaSerializer,
     
 )
 
-from rest_framework.throttling import SimpleRateThrottle
+from rest_framework.throttling import SimpleRateThrottle    # type: ignore[reportMissingModuleSource]
 
 from .permissions import (
     EsSuperAdmin,
@@ -1309,13 +1323,7 @@ class DocumentoVehiculoViewSet(
             serializer
         )
 
-    def perform_update(
-        self,
-        serializer,
-    ):
-        self._guardar_validado(
-            serializer
-        )
+   
 
 
 class AsignacionVehiculoViewSet(viewsets.ModelViewSet):
@@ -1718,40 +1726,42 @@ class JornadaDiariaViewSet(
         conductor,
         sucursal,
     ):
+        tipo_cobro = (
+            getattr(
+                conductor,
+                "tipo_cobro",
+                "porcentaje",
+            )
+            or "porcentaje"
+        )
+
+        # En alquiler no se usa porcentaje.
+        if tipo_cobro == "alquiler":
+            return Decimal("0")
+
         porcentaje = getattr(
             conductor,
             "porcentaje_pago",
             None,
         )
 
-        if porcentaje in [
-            None,
-            "",
-        ]:
+        if porcentaje in [None, ""]:
             porcentaje = (
-                self
-                ._obtener_porcentaje_fallback(
+                self._obtener_porcentaje_fallback(
                     sucursal
                 )
             )
 
-        porcentaje = Decimal(
-            str(
-                porcentaje
-                or "0.00"
-            )
-        )
+        porcentaje = Decimal(str(porcentaje))
 
         if (
-            porcentaje
-            < Decimal("1.00")
-            or porcentaje
-            > Decimal("100.00")
+            porcentaje < Decimal("1.00")
+            or porcentaje > Decimal("100.00")
         ):
             raise ValidationError({
                 "porcentaje_pago": (
-                    "El porcentaje del conductor "
-                    "debe estar entre 1 y 100."
+                    "El porcentaje del conductor debe "
+                    "estar entre 1 y 100."
                 )
             })
 
@@ -2068,23 +2078,34 @@ class JornadaDiariaViewSet(
                 codigo="circulando",
                 nombre="Circulando",
             )
+            )
+        tipo_cobro = (
+            getattr(
+                conductor,
+                "tipo_cobro",
+                "porcentaje",
+            )
+            or "porcentaje"
         )
+
+        porcentaje_pago = (
+            Decimal("0.00")
+            if tipo_cobro == "alquiler"
+            else porcentaje
+            )       
 
         jornada = serializer.save(
             sucursal=sucursal,
             conductor=conductor,
             vehiculo=vehiculo,
-            estado=(
-                estado_jornada_circulando
-            ),
+            estado=(estado_jornada_circulando),
             kilometraje_final=None,
             kilometros_recorridos=0,
             ingreso_bruto=Decimal("0.00"),
             monto_alquiler=Decimal("0.00"),
-            tipo_cobro="porcentaje",
+            tipo_cobro=tipo_cobro,
             porcentaje_pago_conductor=(
-                porcentaje
-            ),
+            porcentaje_pago),
             pago_conductor=Decimal("0.00"),
         )
 
@@ -2253,6 +2274,21 @@ class JornadaDiariaViewSet(
             )
         )
 
+        tipo_cobro = (
+            getattr(
+                conductor,
+                "tipo_cobro",
+                "porcentaje",
+            )
+            or "porcentaje"
+        )
+
+        porcentaje_pago = (
+            Decimal("0.00")
+            if tipo_cobro == "alquiler"
+            else porcentaje
+        )
+
         km_inicial = (
             serializer
             .validated_data
@@ -2281,12 +2317,12 @@ class JornadaDiariaViewSet(
         )
 
         tipo_cobro = (
-            serializer
-            .validated_data
-            .get(
+            getattr(
+                conductor,
                 "tipo_cobro",
                 instance.tipo_cobro,
             )
+            or "porcentaje"
         )
 
         monto_alquiler = (
@@ -2366,12 +2402,68 @@ class JornadaDiariaViewSet(
             )
         )
 
-        ingreso_bruto = (
-            request.data.get(
+        tipo_cobro = str(
+            jornada.tipo_cobro or "porcentaje"
+        ).strip().lower()
+
+        if es_taxista(user):
+            if tipo_cobro == "porcentaje":
+                ingreso_bruto = request.data.get(
+                    "ingreso_bruto"
+                )
+
+                if ingreso_bruto in [None, ""]:
+                    raise ValidationError({
+                        "ingreso_bruto": (
+                            "Debes ingresar el total producido del día."
+                        )
+                    })
+
+                try:
+                    ingreso_bruto = Decimal(
+                        str(ingreso_bruto)
+                    )
+                except (
+                    TypeError,
+                    ValueError,
+                    InvalidOperation,
+                ):
+                    raise ValidationError({
+                        "ingreso_bruto": (
+                            "El total producido del día debe ser válido."
+                        )
+                    })
+
+                if ingreso_bruto < 0:
+                    raise ValidationError({
+                        "ingreso_bruto": (
+                            "El total producido del día no puede ser negativo."
+                        )
+                    })
+            else:
+                # En alquiler el taxista solo registra kilometraje.
+                ingreso_bruto = jornada.ingreso_bruto
+
+        else:
+            ingreso_bruto = request.data.get(
                 "ingreso_bruto",
                 jornada.ingreso_bruto,
             )
-        )
+
+        try:
+            ingreso_bruto = Decimal(
+                str(ingreso_bruto or 0)
+            )
+        except (
+            TypeError,
+            ValueError,
+            InvalidOperation,
+        ):
+            raise ValidationError({
+                "ingreso_bruto": (
+                    "El ingreso bruto debe ser válido."
+                )
+            })
 
         if kilometraje_final in [
             None,
@@ -2623,12 +2715,13 @@ class JornadaDiariaViewSet(
                     "sucursal desde el panel superadmin."
                 )
 
-        tipo_cobro = (
-            request.data.get(
+            tipo_cobro = (
+            getattr(
+                jornada.conductor,
                 "tipo_cobro",
-                jornada.tipo_cobro
-                or "porcentaje",
+                jornada.tipo_cobro,
             )
+            or "porcentaje"
         )
 
         if tipo_cobro not in [
@@ -3945,97 +4038,843 @@ class DashboardResumenView(APIView):
         return Response(data)
 
 class ReporteFinancieroView(APIView):
-    permission_classes = [EsAdminSucursalOSuperAdmin]
+    permission_classes = [
+        EsAdminSucursalOSuperAdmin
+    ]
+
+    def _obtener_fechas(self, request):
+        periodo = str(
+            request.query_params.get(
+                "periodo",
+                "mes",
+            )
+        ).strip().lower()
+
+        fecha_inicio_param = request.query_params.get(
+            "fecha_inicio"
+        )
+        fecha_fin_param = request.query_params.get(
+            "fecha_fin"
+        )
+
+        if fecha_inicio_param or fecha_fin_param:
+            fecha_inicio = parse_date(
+                fecha_inicio_param or ""
+            )
+            fecha_fin = parse_date(
+                fecha_fin_param or ""
+            )
+
+            if not fecha_inicio or not fecha_fin:
+                return (
+                    periodo,
+                    None,
+                    None,
+                    "Debes seleccionar una fecha inicial y una fecha final válidas.",
+                )
+
+            if fecha_inicio > fecha_fin:
+                return (
+                    periodo,
+                    None,
+                    None,
+                    "La fecha inicial no puede ser mayor que la fecha final.",
+                )
+
+            return (
+                "personalizado",
+                fecha_inicio,
+                fecha_fin,
+                None,
+            )
+
+        fecha_inicio, fecha_fin = (
+            obtener_rango_periodo(periodo)
+        )
+
+        return (
+            periodo,
+            fecha_inicio,
+            fecha_fin,
+            None,
+        )
+
+    def _nombre_vehiculo(self, vehiculo):
+        if not vehiculo:
+            return "Sin vehículo"
+
+        datos = [
+            getattr(vehiculo, "numero", ""),
+            getattr(vehiculo, "placa", ""),
+            getattr(vehiculo, "marca", ""),
+            getattr(vehiculo, "modelo", ""),
+        ]
+
+        nombre = " - ".join(
+            str(dato)
+            for dato in datos
+            if dato
+        ).strip()
+
+        return nombre or f"Vehículo #{vehiculo.pk}"
 
     def get(self, request):
         user = request.user
-        periodo = request.query_params.get("periodo", "dia")
-        fecha_inicio, fecha_fin = obtener_rango_periodo(periodo)
 
-        jornadas = JornadaDiaria.objects.all()
-        gastos = Gasto.objects.all()
-        mantenimientos = Mantenimiento.objects.all()
+        (
+            periodo,
+            fecha_inicio,
+            fecha_fin,
+            error_fechas,
+        ) = self._obtener_fechas(request)
+
+        if error_fechas:
+            return Response(
+                {
+                    "detail": error_fechas
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        jornadas = JornadaDiaria.objects.select_related(
+            "vehiculo"
+        ).all()
+
+        gastos = Gasto.objects.select_related(
+            "vehiculo"
+        ).all()
+
+        mantenimientos = Mantenimiento.objects.select_related(
+            "vehiculo"
+        ).all()
 
         if es_superadmin(user):
-            sucursal_id = request.query_params.get("sucursal")
+            sucursal_id = str(
+                request.query_params.get(
+                    "sucursal",
+                    "",
+                )
+            ).strip()
 
             if sucursal_id:
-                jornadas = jornadas.filter(sucursal_id=sucursal_id)
-                gastos = gastos.filter(sucursal_id=sucursal_id)
-                mantenimientos = mantenimientos.filter(sucursal_id=sucursal_id)
-            else:
-                jornadas = jornadas.filter(sucursal__isnull=True)
-                gastos = gastos.filter(sucursal__isnull=True)
-                mantenimientos = mantenimientos.filter(sucursal__isnull=True)
-
-        elif es_admin_sucursal(user):
-            if not user.sucursal:
-                return Response(
-                    {"detail": "Tu usuario no tiene una sucursal asignada."},
-                    status=403
+                jornadas = jornadas.filter(
+                    sucursal_id=sucursal_id
                 )
 
-            jornadas = jornadas.filter(sucursal=user.sucursal)
-            gastos = gastos.filter(sucursal=user.sucursal)
-            mantenimientos = mantenimientos.filter(sucursal=user.sucursal)
+                gastos = gastos.filter(
+                    sucursal_id=sucursal_id
+                )
 
-        elif es_taxista(user):
+                mantenimientos = mantenimientos.filter(
+                    sucursal_id=sucursal_id
+                )
+
+        elif es_admin_sucursal(user):
+            if not user.sucursal_id:
+                return Response(
+                    {
+                        "detail": (
+                            "Tu usuario no tiene una "
+                            "sucursal asignada."
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
             jornadas = jornadas.filter(
-                sucursal=user.sucursal,
-                conductor__usuario=user
+                sucursal_id=user.sucursal_id
             )
-            gastos = Gasto.objects.none()
-            mantenimientos = Mantenimiento.objects.none()
+
+            gastos = gastos.filter(
+                sucursal_id=user.sucursal_id
+            )
+
+            mantenimientos = mantenimientos.filter(
+                sucursal_id=user.sucursal_id
+            )
 
         else:
-            return Response({"detail": "No tienes permisos."}, status=403)
+            return Response(
+                {
+                    "detail": (
+                        "No tienes permisos para "
+                        "consultar reportes."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
-        jornadas = jornadas.filter(fecha__gte=fecha_inicio, fecha__lte=fecha_fin)
-        gastos = gastos.filter(fecha__gte=fecha_inicio, fecha__lte=fecha_fin)
-        mantenimientos = mantenimientos.filter(
-            fecha__gte=fecha_inicio,
-            fecha__lte=fecha_fin
+        vehiculo_id = str(
+            request.query_params.get(
+                "vehiculo",
+                "",
+            )
+        ).strip()
+
+        if vehiculo_id:
+            if not vehiculo_id.isdigit():
+                return Response(
+                    {
+                        "detail": (
+                            "El vehículo seleccionado "
+                            "no es válido."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            jornadas = jornadas.filter(
+                vehiculo_id=vehiculo_id
+            )
+
+            gastos = gastos.filter(
+                vehiculo_id=vehiculo_id
+            )
+
+            mantenimientos = mantenimientos.filter(
+                vehiculo_id=vehiculo_id
+            )
+
+        jornadas = jornadas.filter(
+            fecha__range=(
+                fecha_inicio,
+                fecha_fin,
+            )
         )
 
-        total_ingresos = sumar_decimal(jornadas, "ingreso_bruto")
-        total_pago_conductores = sumar_decimal(jornadas, "pago_conductor")
-        total_adelantos = sumar_decimal(jornadas, "total_adelantos")
-        total_ganancia_dueno = sumar_decimal(jornadas, "ganancia_dueno")
+        gastos = gastos.filter(
+            fecha__range=(
+                fecha_inicio,
+                fecha_fin,
+            )
+        )
 
-        total_gastos_vehiculos = sumar_decimal(gastos, "monto")
-        total_mantenimiento = sumar_decimal(mantenimientos, "costo")
-        total_gastos_operativos = total_gastos_vehiculos + total_mantenimiento
+        mantenimientos = mantenimientos.filter(
+            fecha__range=(
+                fecha_inicio,
+                fecha_fin,
+            )
+        )
+
+        total_ingresos = sumar_decimal(
+            jornadas,
+            "ingreso_bruto",
+        )
+
+        total_pago_conductores = sumar_decimal(
+            jornadas,
+            "pago_conductor",
+        )
+
+        total_adelantos = sumar_decimal(
+            jornadas,
+            "total_adelantos",
+        )
+
+        total_ganancia_dueno = sumar_decimal(
+            jornadas,
+            "ganancia_dueno",
+        )
+
+        total_gastos_vehiculos = sumar_decimal(
+            gastos,
+            "monto",
+        )
+
+        total_mantenimiento = sumar_decimal(
+            mantenimientos,
+            "costo",
+        )
+
+        total_gastos_operativos = (
+            total_gastos_vehiculos +
+            total_mantenimiento
+        )
 
         total_ganancia_real_dueno = (
-            total_ganancia_dueno
-            - total_gastos_vehiculos
-            - total_mantenimiento
+            total_ganancia_dueno -
+            total_gastos_operativos
         )
 
-        data = {
-            "periodo": periodo,
-            "fecha_inicio": str(fecha_inicio),
-            "fecha_fin": str(fecha_fin),
+        resumen_vehiculos = {}
 
-            "total_ingresos": total_ingresos,
-            "total_pago_conductores": total_pago_conductores,
-            "total_adelantos": total_adelantos,
+        def obtener_resumen(vehiculo):
+            vehiculo_id_local = (
+                vehiculo.pk
+                if vehiculo
+                else 0
+            )
 
-            "total_ganancia_dueno": total_ganancia_dueno,
+            if vehiculo_id_local not in resumen_vehiculos:
+                resumen_vehiculos[
+                    vehiculo_id_local
+                ] = {
+                    "vehiculo_id": vehiculo_id_local,
+                    "vehiculo": self._nombre_vehiculo(
+                        vehiculo
+                    ),
+                    "jornadas": 0,
+                    "kilometros": 0,
+                    "ingresos": Decimal("0.00"),
+                    "pago_conductores": Decimal(
+                        "0.00"
+                    ),
+                    "ganancia_dueno": Decimal(
+                        "0.00"
+                    ),
+                    "gastos": Decimal("0.00"),
+                    "mantenimiento": Decimal(
+                        "0.00"
+                    ),
+                }
 
-            "total_gastos_vehiculos": total_gastos_vehiculos,
-            "total_mantenimiento": total_mantenimiento,
-            "total_gastos_operativos": total_gastos_operativos,
+            return resumen_vehiculos[
+                vehiculo_id_local
+            ]
 
-            "total_ganancia_real_dueno": total_ganancia_real_dueno,
+        for jornada in jornadas:
+            resumen = obtener_resumen(
+                jornada.vehiculo
+            )
 
-            "total_gastos": total_gastos_operativos,
-            "total_jornadas": jornadas.count(),
-            "total_registros_gastos": gastos.count(),
-            "total_registros_mantenimiento": mantenimientos.count(),
+            resumen["jornadas"] += 1
+
+            resumen["kilometros"] += int(
+                jornada.kilometros_recorridos or 0
+            )
+
+            resumen["ingresos"] += Decimal(
+                str(jornada.ingreso_bruto or 0)
+            )
+
+            resumen["pago_conductores"] += Decimal(
+                str(jornada.pago_conductor or 0)
+            )
+
+            resumen["ganancia_dueno"] += Decimal(
+                str(jornada.ganancia_dueno or 0)
+            )
+
+        for gasto in gastos:
+            resumen = obtener_resumen(
+                gasto.vehiculo
+            )
+
+            resumen["gastos"] += Decimal(
+                str(gasto.monto or 0)
+            )
+
+        for mantenimiento in mantenimientos:
+            resumen = obtener_resumen(
+                mantenimiento.vehiculo
+            )
+
+            resumen["mantenimiento"] += Decimal(
+                str(mantenimiento.costo or 0)
+            )
+
+        detalle_por_vehiculo = []
+
+        for resumen in resumen_vehiculos.values():
+            gastos_operativos = (
+                resumen["gastos"] +
+                resumen["mantenimiento"]
+            )
+
+            ganancia_real = (
+                resumen["ganancia_dueno"] -
+                gastos_operativos
+            )
+
+            detalle_por_vehiculo.append(
+                {
+                    **resumen,
+                    "gastos_operativos": (
+                        gastos_operativos
+                    ),
+                    "ganancia_real": ganancia_real,
+                }
+            )
+
+        detalle_por_vehiculo.sort(
+            key=lambda item: (
+                item["vehiculo"] or ""
+            ).lower()
+        )
+
+        return Response(
+            {
+                "periodo": periodo,
+                "fecha_inicio": str(fecha_inicio),
+                "fecha_fin": str(fecha_fin),
+                "vehiculo_seleccionado": (
+                    vehiculo_id or None
+                ),
+
+                "total_ingresos": total_ingresos,
+                "total_pago_conductores": (
+                    total_pago_conductores
+                ),
+                "total_adelantos": total_adelantos,
+                "total_ganancia_dueno": (
+                    total_ganancia_dueno
+                ),
+
+                "total_gastos_vehiculos": (
+                    total_gastos_vehiculos
+                ),
+                "total_mantenimiento": (
+                    total_mantenimiento
+                ),
+                "total_gastos_operativos": (
+                    total_gastos_operativos
+                ),
+                "total_ganancia_real_dueno": (
+                    total_ganancia_real_dueno
+                ),
+
+                "total_gastos": (
+                    total_gastos_operativos
+                ),
+                "total_jornadas": jornadas.count(),
+                "total_registros_gastos": (
+                    gastos.count()
+                ),
+                "total_registros_mantenimiento": (
+                    mantenimientos.count()
+                ),
+
+                "detalle_por_vehiculo": (
+                    detalle_por_vehiculo
+                ),
+            }
+        )
+
+
+class ReporteFinancieroExcelView(
+    ReporteFinancieroView
+):
+    permission_classes = [
+        EsAdminSucursalOSuperAdmin
+    ]
+
+    def get(self, request):
+        respuesta_reporte = super().get(
+            request
+        )
+
+        if respuesta_reporte.status_code != 200:
+            return respuesta_reporte
+
+        reporte = respuesta_reporte.data
+
+        libro = Workbook()
+        hoja = libro.active
+        hoja.title = "Reporte por vehículo"
+
+        color_amarillo = "F5B800"
+        color_amarillo_claro = "FFF4CF"
+        color_azul = "1D4ED8"
+        color_verde = "059669"
+        color_rojo = "DC2626"
+        color_gris = "F1F5F9"
+        color_texto = "0F172A"
+        color_borde = "CBD5E1"
+
+        borde_fino = Border(
+            left=Side(
+                style="thin",
+                color=color_borde,
+            ),
+            right=Side(
+                style="thin",
+                color=color_borde,
+            ),
+            top=Side(
+                style="thin",
+                color=color_borde,
+            ),
+            bottom=Side(
+                style="thin",
+                color=color_borde,
+            ),
+        )
+
+        hoja.merge_cells("A1:J1")
+
+        celda_titulo = hoja["A1"]
+        celda_titulo.value = (
+            "TAXICONTROL - REPORTE FINANCIERO"
+        )
+        celda_titulo.font = Font(
+            bold=True,
+            size=16,
+            color="FFFFFF",
+        )
+        celda_titulo.fill = PatternFill(
+            "solid",
+            fgColor=color_amarillo,
+        )
+        celda_titulo.alignment = Alignment(
+            horizontal="center",
+            vertical="center",
+        )
+
+        hoja.row_dimensions[1].height = 30
+
+        hoja.merge_cells("A2:J2")
+
+        celda_periodo = hoja["A2"]
+        celda_periodo.value = (
+            f"Período: "
+            f"{reporte['fecha_inicio']} "
+            f"al {reporte['fecha_fin']}"
+        )
+        celda_periodo.font = Font(
+            bold=True,
+            size=11,
+            color=color_texto,
+        )
+        celda_periodo.fill = PatternFill(
+            "solid",
+            fgColor=color_amarillo_claro,
+        )
+        celda_periodo.alignment = Alignment(
+            horizontal="center",
+        )
+
+        hoja["A4"] = "RESUMEN GENERAL"
+        hoja["A4"].font = Font(
+            bold=True,
+            size=12,
+            color="FFFFFF",
+        )
+        hoja["A4"].fill = PatternFill(
+            "solid",
+            fgColor=color_azul,
+        )
+
+        hoja.merge_cells("A4:B4")
+
+        resumen = [
+            (
+                "Ingresos",
+                reporte.get(
+                    "total_ingresos",
+                    0,
+                ),
+                color_verde,
+            ),
+            (
+                "Pago a conductores",
+                reporte.get(
+                    "total_pago_conductores",
+                    0,
+                ),
+                color_azul,
+            ),
+            (
+                "Gastos operativos",
+                reporte.get(
+                    "total_gastos_operativos",
+                    0,
+                ),
+                color_rojo,
+            ),
+            (
+                "Ganancia real",
+                reporte.get(
+                    "total_ganancia_real_dueno",
+                    0,
+                ),
+                color_amarillo,
+            ),
+        ]
+
+        fila_resumen = 5
+
+        for etiqueta, valor, color in resumen:
+            hoja.cell(
+                fila_resumen,
+                1,
+                etiqueta,
+            )
+
+            hoja.cell(
+                fila_resumen,
+                2,
+                float(valor or 0),
+            )
+
+            hoja.cell(
+                fila_resumen,
+                1,
+            ).font = Font(
+                bold=True,
+                color=color_texto,
+            )
+
+            hoja.cell(
+                fila_resumen,
+                2,
+            ).font = Font(
+                bold=True,
+                color=color,
+            )
+
+            hoja.cell(
+                fila_resumen,
+                1,
+            ).fill = PatternFill(
+                "solid",
+                fgColor=color_gris,
+            )
+
+            for columna in [1, 2]:
+                hoja.cell(
+                    fila_resumen,
+                    columna,
+                ).border = borde_fino
+
+            hoja.cell(
+                fila_resumen,
+                2,
+            ).number_format = (
+                '"C$" #,##0.00'
+            )
+
+            fila_resumen += 1
+
+        fila_tabla = 11
+
+        hoja.merge_cells(
+            start_row=fila_tabla,
+            start_column=1,
+            end_row=fila_tabla,
+            end_column=10,
+        )
+
+        titulo_tabla = hoja.cell(
+            fila_tabla,
+            1,
+            "DETALLE ORDENADO POR VEHÍCULO",
+        )
+
+        titulo_tabla.font = Font(
+            bold=True,
+            size=12,
+            color="FFFFFF",
+        )
+
+        titulo_tabla.fill = PatternFill(
+            "solid",
+            fgColor=color_azul,
+        )
+
+        titulo_tabla.alignment = Alignment(
+            horizontal="center",
+        )
+
+        encabezados = [
+            "Vehículo",
+            "Jornadas",
+            "Kilómetros",
+            "Ingresos",
+            "Pago conductor",
+            "Ganancia dueño",
+            "Gastos",
+            "Mantenimiento",
+            "Gastos operativos",
+            "Ganancia real",
+        ]
+
+        fila_encabezados = fila_tabla + 1
+
+        for columna, encabezado in enumerate(
+            encabezados,
+            start=1,
+        ):
+            celda = hoja.cell(
+                fila_encabezados,
+                columna,
+                encabezado,
+            )
+
+            celda.font = Font(
+                bold=True,
+                color="FFFFFF",
+            )
+
+            celda.fill = PatternFill(
+                "solid",
+                fgColor=color_amarillo,
+            )
+
+            celda.alignment = Alignment(
+                horizontal="center",
+                vertical="center",
+                wrap_text=True,
+            )
+
+            celda.border = borde_fino
+
+        fila_datos = fila_encabezados + 1
+
+        detalle = reporte.get(
+            "detalle_por_vehiculo",
+            [],
+        )
+
+        for item in detalle:
+            datos = [
+                item.get("vehiculo", "-"),
+                item.get("jornadas", 0),
+                item.get("kilometros", 0),
+                float(item.get("ingresos", 0)),
+                float(
+                    item.get(
+                        "pago_conductores",
+                        0,
+                    )
+                ),
+                float(
+                    item.get(
+                        "ganancia_dueno",
+                        0,
+                    )
+                ),
+                float(item.get("gastos", 0)),
+                float(
+                    item.get(
+                        "mantenimiento",
+                        0,
+                    )
+                ),
+                float(
+                    item.get(
+                        "gastos_operativos",
+                        0,
+                    )
+                ),
+                float(
+                    item.get(
+                        "ganancia_real",
+                        0,
+                    )
+                ),
+            ]
+
+            for columna, valor in enumerate(
+                datos,
+                start=1,
+            ):
+                celda = hoja.cell(
+                    fila_datos,
+                    columna,
+                    valor,
+                )
+
+                celda.border = borde_fino
+
+                celda.alignment = Alignment(
+                    horizontal=(
+                        "left"
+                        if columna == 1
+                        else "right"
+                    ),
+                    vertical="center",
+                )
+
+                if columna >= 4:
+                    celda.number_format = (
+                        '"C$" #,##0.00'
+                    )
+
+            ganancia_celda = hoja.cell(
+                fila_datos,
+                10,
+            )
+
+            if float(
+                item.get(
+                    "ganancia_real",
+                    0,
+                )
+            ) < 0:
+                ganancia_celda.font = Font(
+                    bold=True,
+                    color=color_rojo,
+                )
+            else:
+                ganancia_celda.font = Font(
+                    bold=True,
+                    color=color_verde,
+                )
+
+            fila_datos += 1
+
+        if not detalle:
+            hoja.merge_cells(
+                start_row=fila_datos,
+                start_column=1,
+                end_row=fila_datos,
+                end_column=10,
+            )
+
+            celda_vacia = hoja.cell(
+                fila_datos,
+                1,
+                "No hay registros para los filtros seleccionados.",
+            )
+
+            celda_vacia.alignment = Alignment(
+                horizontal="center",
+            )
+
+            celda_vacia.font = Font(
+                italic=True,
+                color="64748B",
+            )
+
+        anchos = {
+            "A": 30,
+            "B": 12,
+            "C": 14,
+            "D": 16,
+            "E": 18,
+            "F": 18,
+            "G": 16,
+            "H": 18,
+            "I": 20,
+            "J": 17,
         }
 
-        return Response(data)
+        for columna, ancho in anchos.items():
+            hoja.column_dimensions[
+                columna
+            ].width = ancho
+
+        hoja.freeze_panes = "A13"
+
+        hoja.sheet_view.showGridLines = False
+
+        respuesta = HttpResponse(
+            content_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            )
+        )
+
+        respuesta[
+            "Content-Disposition"
+        ] = (
+            "attachment; "
+            "filename=reporte_financiero_taxi_control.xlsx"
+        )
+
+        libro.save(respuesta)
+
+        return respuesta
 
 
 class ReporteKilometrajeView(APIView):
@@ -4356,13 +5195,18 @@ def _serializar_liquidacion(liquidacion):
     detalles = liquidacion.detalles.all().order_by("fecha", "id")
 
     return {
-        "id": liquidacion.id,
-        "conductor": {
-            "id": liquidacion.conductor_id,
-            "nombre": f"{liquidacion.conductor.nombre} {liquidacion.conductor.apellido}".strip(),
-            "cedula": liquidacion.conductor.cedula,
-        },
+        "id": liquidacion.pk,
+        "liquidacion_id": liquidacion.pk,
+
+
+       "conductor": {
+        "id": liquidacion.conductor_id,
+        "nombre": f"{liquidacion.conductor.nombre} {liquidacion.conductor.apellido}".strip(),
+        "cedula": liquidacion.conductor.cedula,
+        "telefono": liquidacion.conductor.telefono or "",
+    },
         "conductor_nombre": f"{liquidacion.conductor.nombre} {liquidacion.conductor.apellido}".strip(),
+        "conductor_telefono": liquidacion.conductor.telefono or "",
         "cedula": liquidacion.conductor.cedula,
         "fecha": liquidacion.fecha,
         "fecha_inicio": liquidacion.fecha_inicio,
@@ -4795,4 +5639,119 @@ class LiquidacionReciboView(APIView):
         return Response(
             _serializar_liquidacion(liquidacion),
             status=status.HTTP_200_OK
+        )
+
+class PaginacionAuditoria(PageNumberPagination):
+    page_size = 15
+    page_size_query_param = "page_size"
+    max_page_size = 50
+
+
+class AuditoriaView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        usuario = request.user
+
+        if es_superadmin(usuario):
+            movimientos = MovimientoAuditoria.objects.select_related(
+                "usuario",
+                "sucursal",
+            ).all()
+
+        elif es_admin_sucursal(usuario):
+            if not usuario.sucursal_id:
+                movimientos = MovimientoAuditoria.objects.none()
+            else:
+                movimientos = MovimientoAuditoria.objects.select_related(
+                    "usuario",
+                    "sucursal",
+                ).filter(
+                    sucursal_id=usuario.sucursal_id,
+                )
+
+        else:
+            return Response(
+                {
+                    "detail": (
+                        "No tienes permiso para consultar "
+                        "los movimientos del sistema."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        fecha_inicio = request.query_params.get(
+            "fecha_inicio"
+        )
+
+        fecha_fin = request.query_params.get(
+            "fecha_fin"
+        )
+
+        usuario_id = request.query_params.get(
+            "usuario"
+        )
+
+        accion = request.query_params.get(
+            "accion"
+        )
+
+        modulo = request.query_params.get(
+            "modulo"
+        )
+
+        buscar = request.query_params.get(
+            "buscar",
+            "",
+        ).strip()
+
+        if fecha_inicio:
+            movimientos = movimientos.filter(
+                fecha__date__gte=fecha_inicio,
+            )
+
+        if fecha_fin:
+            movimientos = movimientos.filter(
+                fecha__date__lte=fecha_fin,
+            )
+
+        if usuario_id:
+            movimientos = movimientos.filter(
+                usuario_id=usuario_id,
+            )
+
+        if accion:
+            movimientos = movimientos.filter(
+                accion=accion,
+            )
+
+        if modulo:
+            movimientos = movimientos.filter(
+                modulo__icontains=modulo,
+            )
+
+        if buscar:
+            movimientos = movimientos.filter(
+                Q(descripcion__icontains=buscar)
+                | Q(modulo__icontains=buscar)
+                | Q(usuario__username__icontains=buscar)
+                | Q(usuario__first_name__icontains=buscar)
+                | Q(usuario__last_name__icontains=buscar)
+            )
+
+        paginador = PaginacionAuditoria()
+
+        pagina = paginador.paginate_queryset(
+            movimientos,
+            request,
+        )
+
+        serializer = MovimientoAuditoriaSerializer(
+            pagina,
+            many=True,
+        )
+
+        return paginador.get_paginated_response(
+            serializer.data
         )

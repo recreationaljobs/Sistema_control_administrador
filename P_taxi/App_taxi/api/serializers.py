@@ -24,6 +24,7 @@ from ..models import (
     Adelanto,
     Mantenimiento,
     ConfiguracionSistema,
+    MovimientoAuditoria,
 )
 
 from .services import (
@@ -306,6 +307,7 @@ class ConductorSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Conductor
+
         fields = [
             "id",
             "sucursal",
@@ -323,7 +325,9 @@ class ConductorSerializer(serializers.ModelSerializer):
             "licencia",
             "vencimiento_licencia",
 
+            "tipo_cobro",
             "porcentaje_pago",
+
             "fecha_registro",
             "activo",
         ]
@@ -346,8 +350,12 @@ class ConductorSerializer(serializers.ModelSerializer):
                 "required": False,
                 "allow_null": True,
             },
+            "tipo_cobro": {
+                "required": False,
+                "allow_blank": False,
+            },
             "porcentaje_pago": {
-                "required": True,
+                "required": False,
                 "allow_null": False,
             },
             "numero_licencia": {
@@ -365,9 +373,6 @@ class ConductorSerializer(serializers.ModelSerializer):
             },
         }
 
-    def get_nombre_completo(self, obj):
-        return f"{obj.nombre} {obj.apellido}".strip()
-
     def validate(self, attrs):
         request = self.context.get("request")
         user = request.user if request else None
@@ -377,30 +382,86 @@ class ConductorSerializer(serializers.ModelSerializer):
             getattr(self.instance, "cedula", None)
         )
 
-        porcentaje_pago = attrs.get(
-            "porcentaje_pago",
-            getattr(self.instance, "porcentaje_pago", None)
-        )
+        tipo_cobro = attrs.get(
+            "tipo_cobro",
+            getattr(
+                self.instance,
+                "tipo_cobro",
+                "porcentaje"
+            )
+        ) or "porcentaje"
 
-        if porcentaje_pago in (None, ""):
+        if tipo_cobro not in [
+            "porcentaje",
+            "alquiler",
+        ]:
             raise serializers.ValidationError({
-                "porcentaje_pago": "Debes ingresar el porcentaje de pago del conductor."
+                "tipo_cobro": (
+                    "El tipo de cobro debe ser "
+                    "porcentaje o alquiler."
+                )
             })
 
-        porcentaje_pago = Decimal(str(porcentaje_pago))
+        attrs["tipo_cobro"] = tipo_cobro
 
-        if porcentaje_pago < Decimal("1.00") or porcentaje_pago > Decimal("100.00"):
-            raise serializers.ValidationError({
-                "porcentaje_pago": "El porcentaje debe estar entre 1 y 100."
-            })
+        if tipo_cobro == "alquiler":
+            # El monto diario se registra después,
+            # desde la jornada por administración.
+            attrs["porcentaje_pago"] = Decimal("0.00")
 
-        attrs["porcentaje_pago"] = porcentaje_pago.quantize(Decimal("0.01"))
+        else:
+            porcentaje_pago = attrs.get(
+                "porcentaje_pago",
+                getattr(
+                    self.instance,
+                    "porcentaje_pago",
+                    None
+                )
+            )
+
+            if porcentaje_pago in (None, ""):
+                raise serializers.ValidationError({
+                    "porcentaje_pago": (
+                        "Debes ingresar el porcentaje "
+                        "de pago del conductor."
+                    )
+                })
+
+            porcentaje_pago = Decimal(
+                str(porcentaje_pago)
+            )
+
+            if (
+                porcentaje_pago < Decimal("1.00")
+                or porcentaje_pago > Decimal("100.00")
+            ):
+                raise serializers.ValidationError({
+                    "porcentaje_pago": (
+                        "El porcentaje debe estar "
+                        "entre 1 y 100."
+                    )
+                })
+
+            attrs["porcentaje_pago"] = (
+                porcentaje_pago.quantize(
+                    Decimal("0.01")
+                )
+            )
 
         if not user:
             return attrs
 
-        if user.rol and user.rol.codigo in ["superadmin", "super_admin"]:
-            sucursal = self.instance.sucursal if self.instance else None
+        if (
+            user.rol
+            and user.rol.codigo
+            in ["superadmin", "super_admin"]
+        ):
+            sucursal = (
+                self.instance.sucursal
+                if self.instance
+                else None
+            )
+
             attrs["sucursal"] = sucursal
 
             if cedula:
@@ -410,19 +471,30 @@ class ConductorSerializer(serializers.ModelSerializer):
                 )
 
                 if self.instance:
-                    qs = qs.exclude(pk=self.instance.pk)
+                    qs = qs.exclude(
+                        pk=self.instance.pk
+                    )
 
                 if qs.exists():
                     raise serializers.ValidationError({
-                        "cedula": "Ya existe un conductor con esta cédula en esa sucursal."
+                        "cedula": (
+                            "Ya existe un conductor con "
+                            "esta cédula en esa sucursal."
+                        )
                     })
 
             return attrs
 
-        if user.rol and user.rol.codigo == "admin_sucursal":
+        if (
+            user.rol
+            and user.rol.codigo == "admin_sucursal"
+        ):
             if not user.sucursal:
                 raise serializers.ValidationError({
-                    "sucursal": "Tu usuario no tiene una sucursal asignada."
+                    "sucursal": (
+                        "Tu usuario no tiene una "
+                        "sucursal asignada."
+                    )
                 })
 
             attrs["sucursal"] = user.sucursal
@@ -434,11 +506,16 @@ class ConductorSerializer(serializers.ModelSerializer):
                 )
 
                 if self.instance:
-                    qs = qs.exclude(pk=self.instance.pk)
+                    qs = qs.exclude(
+                        pk=self.instance.pk
+                    )
 
                 if qs.exists():
                     raise serializers.ValidationError({
-                        "cedula": "Ya existe un conductor con esta cédula en tu sucursal."
+                        "cedula": (
+                            "Ya existe un conductor con "
+                            "esta cédula en tu sucursal."
+                        )
                     })
 
             return attrs
@@ -2343,3 +2420,43 @@ class ConfiguracionSistemaSerializer(serializers.ModelSerializer):
             "moneda",
         ]
         read_only_fields = ["id", "sucursal", "sucursal_nombre"]
+
+class MovimientoAuditoriaSerializer(serializers.ModelSerializer):
+    usuario_nombre = serializers.SerializerMethodField()
+    sucursal_nombre = serializers.CharField(
+        source="sucursal.nombre",
+        read_only=True,
+        default=None,
+    )
+    accion_nombre = serializers.CharField(
+        source="get_accion_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = MovimientoAuditoria
+        fields = [
+            "id",
+            "usuario",
+            "usuario_nombre",
+            "sucursal",
+            "sucursal_nombre",
+            "accion",
+            "accion_nombre",
+            "modulo",
+            "descripcion",
+            "objeto_id",
+            "datos_anteriores",
+            "datos_nuevos",
+            "direccion_ip",
+            "fecha",
+        ]
+        read_only_fields = fields
+
+    def get_usuario_nombre(self, obj):
+        if not obj.usuario:
+            return "Sistema"
+
+        nombre = obj.usuario.get_full_name().strip()
+
+        return nombre or obj.usuario.username
