@@ -46,6 +46,31 @@ if not SECRET_KEY:
 
 DEBUG = os.getenv("DEBUG", "False").strip().lower() == "true"
 
+# ============================================================
+# GOOGLE MAPS PLATFORM
+# ============================================================
+
+GOOGLE_MAPS_ROUTES_API_KEY = (
+    os.getenv(
+        "GOOGLE_MAPS_ROUTES_API_KEY",
+        "",
+    ).strip()
+)
+
+GOOGLE_MAPS_PLACES_API_KEY = (
+    os.getenv(
+        "GOOGLE_MAPS_PLACES_API_KEY",
+        "",
+    ).strip()
+)
+
+GOOGLE_MAPS_REQUEST_TIMEOUT = int(
+    os.getenv(
+        "GOOGLE_MAPS_REQUEST_TIMEOUT",
+        "15",
+    )
+)
+
 
 ALLOWED_HOSTS = [
     host.strip()
@@ -179,6 +204,14 @@ INSTALLED_APPS = [
 
     # Aplicación del sistema
     "App_taxi",
+
+    # Plataforma móvil Topo (API v1)
+    "apps.cuentas.apps.CuentasConfig",
+    "apps.pasajeros.apps.PasajerosConfig",
+    "apps.flota.apps.FlotaConfig",
+    "apps.viajes.apps.ViajesConfig",
+    "apps.tarifas.apps.TarifasConfig",
+    "apps.seguimiento.apps.SeguimientoConfig",
 ]
 
 
@@ -502,4 +535,17 @@ FRONTEND_JORNADAS_URL = os.getenv(
         "https://taxiadmin.servitaxitortuguero.com/"
         "dashboard/jornadas"
     )
+)
+
+PAGOS_TARJETA_HABILITADOS = (
+    os.getenv(
+        "PAGOS_TARJETA_HABILITADOS",
+        "False",
+    ).strip().lower()
+    in {
+        "true",
+        "1",
+        "yes",
+        "si",
+    }
 )

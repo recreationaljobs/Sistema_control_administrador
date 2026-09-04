@@ -1,0 +1,148 @@
+from django.urls import path
+
+from .calificaciones_views import (
+    CalificarViajeView,
+    MiResumenCalificacionesView,
+)
+from .cierre_views import (
+    CierrePendienteViajeView,
+)
+from .detalle_views import (
+    DetalleViajeView,
+)
+from .historial_views import (
+    HistorialViajesView,
+)
+from .ofertas_views import (
+    AceptarContraofertaView,
+    CancelarContraofertaConductorView,
+    CrearContraofertaView,
+    EstadoContraofertaView,
+    ListarContraofertasView,
+    RechazarContraofertaView,
+)
+from .pagos_views import (
+    ConfiguracionPagosView,
+    ConfirmarPagoEfectivoView,
+    ConsultarPagoViajeView,
+)
+from .views import (
+    AceptarViajeView,
+    CambiarEstadoViajeView,
+    CancelarViajePasajeroView,
+    LiberarViajeConductorView,
+    MiViajeActivoView,
+    SolicitarViajeView,
+    ViajesDisponiblesConductorView,
+)
+
+
+app_name = "viajes"
+
+urlpatterns = [
+    path(
+        "solicitar/",
+        SolicitarViajeView.as_view(),
+        name="solicitar-viaje",
+    ),
+    path(
+        "disponibles/",
+        ViajesDisponiblesConductorView.as_view(),
+        name="viajes-disponibles",
+    ),
+    path(
+        "activo/",
+        MiViajeActivoView.as_view(),
+        name="mi-viaje-activo",
+    ),
+    path(
+        "cierre-pendiente/",
+        CierrePendienteViajeView.as_view(),
+        name="cierre-pendiente-viaje",
+    ),
+    path(
+        "historial/",
+        HistorialViajesView.as_view(),
+        name="historial-viajes",
+    ),
+    path(
+        "calificaciones/mi-resumen/",
+        MiResumenCalificacionesView.as_view(),
+        name="mi-resumen-calificaciones",
+    ),
+    path(
+        "pagos/configuracion/",
+        ConfiguracionPagosView.as_view(),
+        name="configuracion-pagos",
+    ),
+    path(
+        "ofertas/<uuid:oferta_id>/aceptar/",
+        AceptarContraofertaView.as_view(),
+        name="aceptar-contraoferta",
+    ),
+    path(
+        "ofertas/<uuid:oferta_id>/rechazar/",
+        RechazarContraofertaView.as_view(),
+        name="rechazar-contraoferta",
+    ),
+    path(
+        "ofertas/<uuid:oferta_id>/estado/",
+        EstadoContraofertaView.as_view(),
+        name="estado-contraoferta",
+    ),
+    path(
+        "ofertas/<uuid:oferta_id>/cancelar/",
+        CancelarContraofertaConductorView.as_view(),
+        name="cancelar-contraoferta-conductor",
+    ),
+    path(
+        "<uuid:viaje_id>/aceptar/",
+        AceptarViajeView.as_view(),
+        name="aceptar-viaje",
+    ),
+    path(
+        "<uuid:viaje_id>/estado/",
+        CambiarEstadoViajeView.as_view(),
+        name="cambiar-estado-viaje",
+    ),
+    path(
+        "<uuid:viaje_id>/cancelar/",
+        CancelarViajePasajeroView.as_view(),
+        name="cancelar-viaje-pasajero",
+    ),
+    path(
+        "<uuid:viaje_id>/liberar-conductor/",
+        LiberarViajeConductorView.as_view(),
+        name="liberar-viaje-conductor",
+    ),
+    path(
+        "<uuid:viaje_id>/ofertas/crear/",
+        CrearContraofertaView.as_view(),
+        name="crear-contraoferta",
+    ),
+    path(
+        "<uuid:viaje_id>/ofertas/",
+        ListarContraofertasView.as_view(),
+        name="listar-contraofertas",
+    ),
+    path(
+        "<uuid:viaje_id>/calificar/",
+        CalificarViajeView.as_view(),
+        name="calificar-viaje",
+    ),
+    path(
+        "<uuid:viaje_id>/pago/",
+        ConsultarPagoViajeView.as_view(),
+        name="consultar-pago-viaje",
+    ),
+    path(
+        "<uuid:viaje_id>/pago/confirmar-efectivo/",
+        ConfirmarPagoEfectivoView.as_view(),
+        name="confirmar-pago-efectivo",
+    ),
+    path(
+        "<uuid:viaje_id>/",
+        DetalleViajeView.as_view(),
+        name="detalle-viaje",
+    ),
+]

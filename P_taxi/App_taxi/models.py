@@ -214,6 +214,20 @@ class Conductor(models.Model):
         ]
     )
 
+    ESTADO_VERIFICACION_CHOICES = [
+        ("pendiente", "Pendiente"),
+        ("aprobado", "Aprobado"),
+        ("rechazado", "Rechazado"),
+        ("suspendido", "Suspendido"),
+    ]
+
+    estado_verificacion = models.CharField(
+        max_length=20,
+        choices=ESTADO_VERIFICACION_CHOICES,
+        default="aprobado",
+        db_index=True,
+    )
+
     fecha_registro = models.DateTimeField(auto_now_add=True)
     activo = models.BooleanField(default=True)
 
@@ -249,6 +263,52 @@ class Vehiculo(models.Model):
         null=True,
         related_name="vehiculos"
     )
+    tipo_vehiculo = models.ForeignKey(
+        "flota.TipoVehiculo",
+        on_delete=models.PROTECT,
+        blank=True,
+        null=True,
+        related_name="vehiculos",
+    )
+
+    TIPO_PROPIEDAD_CHOICES = [
+        ("sucursal", "Propiedad de sucursal"),
+        ("conductor", "Propiedad del conductor"),
+    ]
+
+    ESTADO_VERIFICACION_CHOICES = [
+        ("pendiente", "Pendiente"),
+        ("aprobado", "Aprobado"),
+        ("rechazado", "Rechazado"),
+        ("suspendido", "Suspendido"),
+    ]
+
+    tipo_propiedad = models.CharField(
+        max_length=20,
+        choices=TIPO_PROPIEDAD_CHOICES,
+        default="sucursal",
+        db_index=True,
+    )
+
+    propietario_conductor = models.ForeignKey(
+        Conductor,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="vehiculos_propios",
+    )
+
+    estado_verificacion = models.CharField(
+        max_length=20,
+        choices=ESTADO_VERIFICACION_CHOICES,
+        default="aprobado",
+        db_index=True,
+    )
+
+    motivo_rechazo = models.TextField(
+        blank=True,
+        default="",
+    )
 
     numero = models.CharField(max_length=20)
     placa = models.CharField(max_length=20, unique=True)
@@ -282,6 +342,30 @@ class Vehiculo(models.Model):
                 name="unique_numero_vehiculo_por_sucursal"
             )
         ]
+    def clean(self):
+        super().clean()
+
+        if (
+            self.tipo_propiedad == "conductor"
+            and not self.propietario_conductor_id
+        ):
+            raise ValidationError({
+                "propietario_conductor": (
+                    "Debes indicar el conductor "
+                    "propietario del vehículo."
+                )
+            })
+
+        if (
+            self.tipo_propiedad == "sucursal"
+            and self.propietario_conductor_id
+        ):
+            raise ValidationError({
+                "propietario_conductor": (
+                    "Un vehículo de sucursal no debe "
+                    "tener un conductor propietario."
+                )
+            })
 
     def __str__(self):
         return f"{self.numero} - {self.placa}"

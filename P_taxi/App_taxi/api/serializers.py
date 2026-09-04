@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.db.models import Sum, Q
 from django.contrib.auth.password_validation import validate_password as django_validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from apps.flota.models import TipoVehiculo
 
 from ..models import (
     Sucursal,
@@ -658,6 +659,15 @@ class VehiculoSerializer(serializers.ModelSerializer):
     sucursal_nombre = serializers.CharField(source="sucursal.nombre", read_only=True)
     estado_nombre = serializers.CharField(source="estado.nombre", read_only=True)
     estado_codigo = serializers.CharField(source="estado.codigo", read_only=True)
+    tipo_vehiculo_nombre = serializers.CharField(
+        source="tipo_vehiculo.nombre",
+        read_only=True,
+    )
+
+    tipo_vehiculo_codigo = serializers.CharField(
+        source="tipo_vehiculo.codigo",
+        read_only=True,
+    )
     estado_documental = serializers.SerializerMethodField()
 
     proximo_cambio_aceite = serializers.SerializerMethodField()
@@ -680,6 +690,9 @@ class VehiculoSerializer(serializers.ModelSerializer):
             "estado",
             "estado_nombre",
             "estado_codigo",
+            "tipo_vehiculo",
+            "tipo_vehiculo_nombre",
+            "tipo_vehiculo_codigo",
             "estado_documental",
             "numero",
             "placa",
@@ -707,6 +720,7 @@ class VehiculoSerializer(serializers.ModelSerializer):
             "alerta_mantenimiento",
             "estado_mantenimiento_calculado",
             "sin_historial_mantenimiento",
+            
         ]
 
         read_only_fields = [
@@ -714,6 +728,8 @@ class VehiculoSerializer(serializers.ModelSerializer):
             "sucursal_nombre",
             "estado_nombre",
             "estado_codigo",
+            "tipo_vehiculo_nombre",
+            "tipo_vehiculo_codigo",
             "estado_documental",
             "fecha_registro",
             "proximo_cambio_aceite",
@@ -737,7 +753,33 @@ class VehiculoSerializer(serializers.ModelSerializer):
                 "required": False,
                 "allow_null": True,
             },
+            "tipo_vehiculo": {
+                "required": False,
+                "allow_null": True,
+            },
         }
+
+    def create(self, validated_data):
+        if not validated_data.get(
+            "tipo_vehiculo"
+        ):
+            tipo_taxi = (
+                TipoVehiculo.objects
+                .filter(
+                    codigo="taxi",
+                    activo=True,
+                )
+                .first()
+            )
+
+            if tipo_taxi:
+                validated_data[
+                    "tipo_vehiculo"
+                ] = tipo_taxi
+
+        return super().create(
+            validated_data
+        )
 
     def validate(self, attrs):
         request = self.context.get("request")

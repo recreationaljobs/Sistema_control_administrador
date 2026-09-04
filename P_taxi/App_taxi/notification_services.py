@@ -58,8 +58,9 @@ def enviar_notificacion_usuario(
     usuario,
     titulo,
     mensaje,
-    url,
-    tag,
+    url="",
+    tag="",
+    datos=None,
 ):
     dispositivos = (
         DispositivoNotificacion.objects
@@ -74,23 +75,66 @@ def enviar_notificacion_usuario(
 
     firebase_app = obtener_firebase_app()
 
+    datos_firebase = {
+        "title": str(titulo),
+        "body": str(mensaje),
+        "url": str(url),
+        "tag": str(tag),
+    }
+
+    if datos:
+        for clave, valor in datos.items():
+            if valor is not None:
+                datos_firebase[
+                    str(clave)
+                ] = str(valor)
+
     enviados = 0
 
     for dispositivo in dispositivos:
         try:
-            mensaje_firebase = messaging.Message(
-                data={
-                    "title": str(titulo),
-                    "body": str(mensaje),
-                    "url": str(url),
-                    "tag": str(tag),
-                },
-                webpush=messaging.WebpushConfig(
-                    headers={
-                        "Urgency": "high",
-                    },
-                ),
-                token=dispositivo.token,
+            mensaje_firebase = (
+                messaging.Message(
+                    notification=(
+                        messaging.Notification(
+                            title=str(titulo),
+                            body=str(mensaje),
+                        )
+                    ),
+                    data=datos_firebase,
+                    android=(
+                        messaging.AndroidConfig(
+                            priority="high",
+                            notification=(
+                                messaging
+                                .AndroidNotification(
+                                    sound="default",
+                                    tag=str(tag),
+                                )
+                            ),
+                        )
+                    ),
+                    apns=messaging.APNSConfig(
+                        headers={
+                            "apns-priority": "10",
+                        },
+                        payload=(
+                            messaging.APNSPayload(
+                                aps=messaging.Aps(
+                                    sound="default",
+                                )
+                            )
+                        ),
+                    ),
+                    webpush=(
+                        messaging.WebpushConfig(
+                            headers={
+                                "Urgency": "high",
+                            },
+                        )
+                    ),
+                    token=dispositivo.token,
+                )
             )
 
             messaging.send(
@@ -117,8 +161,11 @@ def enviar_notificacion_usuario(
                 "SenderIdMismatchError",
             }:
                 dispositivo.activo = False
+
                 dispositivo.save(
-                    update_fields=["activo"]
+                    update_fields=[
+                        "activo",
+                    ]
                 )
 
     return enviados
