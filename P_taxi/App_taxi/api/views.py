@@ -10,6 +10,14 @@ from django.utils import timezone # type: ignore[reportMissingModuleSource]
 from django.utils.dateparse import parse_date # type: ignore[reportMissingModuleSource]
 from django.http import HttpResponse # type: ignore[reportMissingModuleSource]
 from rest_framework.pagination import PageNumberPagination # type: ignore[reportMissingModuleSource]
+from django.core.exceptions import (
+    ValidationError as DjangoValidationError,
+)
+
+from apps.cuentas.services import (
+    desvincular_conductor_de_sucursal,
+    vincular_conductor_a_sucursal,
+)
 
 from openpyxl import Workbook # type: ignore[reportMissingModuleSource]
 from openpyxl.styles import ( # type: ignore[reportMissingModuleSource]
@@ -115,13 +123,13 @@ from .services import (
 logger = logging.getLogger(__name__)
 class RegistrarDispositivoNotificacionView(APIView):
     permission_classes = [IsAuthenticated]
-
     ROLES_PERMITIDOS = {
-        "taxista",
-        "admin_sucursal",
-        "superadmin",
-        "super_admin",
-    }
+    "pasajero",
+    "taxista",
+    "admin_sucursal",
+    "superadmin",
+    "super_admin",
+}
 
     def post(self, request):
         usuario = request.user
@@ -190,7 +198,12 @@ class RegistrarDispositivoNotificacionView(APIView):
             )
         )
 
-        if codigo_rol == "taxista":
+        if codigo_rol == "pasajero":
+            tipo_notificaciones = (
+                "Recibirás actualizaciones de tus "
+                "viajes y nuevas contraofertas."
+            )
+        elif codigo_rol == "taxista":
             tipo_notificaciones = (
                 "Recibirás recordatorios para abrir y cerrar "
                 "tu jornada, además de alertas del próximo "
@@ -731,6 +744,159 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             )
             return
 
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="vincular-sucursal",
+        permission_classes=[
+            EsAdminSucursalOSuperAdmin
+        ],
+    )
+    def vincular_sucursal(
+        self,
+        request,
+    ):
+        usuario = request.user
+
+        conductor_id = request.data.get(
+            "conductor_id"
+        )
+
+        tipo_vinculacion = str(
+            request.data.get(
+                "tipo_vinculacion",
+                "empleado",
+            )
+        ).strip()
+
+        if not conductor_id:
+            raise ValidationError({
+                "conductor_id": (
+                    "Debes seleccionar un conductor."
+                )
+            })
+
+        if tipo_vinculacion not in [
+            "empleado",
+            "afiliado",
+        ]:
+            raise ValidationError({
+                "tipo_vinculacion": (
+                    "El tipo debe ser empleado "
+                    "o afiliado."
+                )
+            })
+
+        try:
+            conductor = (
+                Conductor.objects
+                .select_related(
+                    "usuario",
+                    "sucursal",
+                )
+                .get(pk=conductor_id)
+            )
+        except Conductor.DoesNotExist:
+            raise ValidationError({
+                "conductor_id": (
+                    "El conductor seleccionado "
+                    "no existe."
+                )
+            })
+
+        if conductor.sucursal_id:
+            raise ValidationError({
+                "conductor_id": (
+                    "El conductor ya pertenece "
+                    "a una sucursal."
+                )
+            })
+
+        if es_admin_sucursal(usuario):
+            if not usuario.sucursal_id:
+                raise PermissionDenied(
+                    "Tu cuenta no tiene una "
+                    "sucursal asignada."
+                )
+
+            sucursal = usuario.sucursal
+
+        elif es_superadmin(usuario):
+            sucursal_id = request.data.get(
+                "sucursal_id"
+            )
+
+            if not sucursal_id:
+                raise ValidationError({
+                    "sucursal_id": (
+                        "Debes seleccionar "
+                        "una sucursal."
+                    )
+                })
+
+            try:
+                sucursal = Sucursal.objects.get(
+                    pk=sucursal_id
+                )
+            except Sucursal.DoesNotExist:
+                raise ValidationError({
+                    "sucursal_id": (
+                        "La sucursal seleccionada "
+                        "no existe."
+                    )
+                })
+
+        else:
+            raise PermissionDenied(
+                "No tienes permiso para "
+                "vincular conductores."
+            )
+
+        try:
+            vinculacion = (
+                vincular_conductor_a_sucursal(
+                    conductor=conductor,
+                    sucursal=sucursal,
+                    usuario=usuario,
+                    tipo_vinculacion=(
+                        tipo_vinculacion
+                    ),
+                )
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(
+                error.messages
+            )
+
+        conductor.refresh_from_db()
+
+        return Response(
+            {
+                "mensaje": (
+                    "El conductor fue vinculado "
+                    "a la sucursal correctamente."
+                ),
+                "vinculacion": {
+                    "id": vinculacion.id,
+                    "estado": vinculacion.estado,
+                    "tipo_vinculacion": (
+                        vinculacion.tipo_vinculacion
+                    ),
+                    "sucursal_id": (
+                        vinculacion.sucursal_id
+                    ),
+                    "conductor_id": (
+                        vinculacion.conductor_id
+                    ),
+                },
+                "conductor": (
+                    self.get_serializer(
+                        conductor
+                    ).data
+                ),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 class ConductorViewSet(viewsets.ModelViewSet):
     serializer_class = ConductorSerializer
@@ -895,30 +1061,7 @@ class ConductorViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(qs.distinct(), many=True)
         return Response(serializer.data)
 
-    @action(detail=True, methods=["post"], url_path="despedir",
-            permission_classes=[EsAdminSucursalOSuperAdmin])
-    def despedir(self, request, pk=None):
-        conductor = self.get_object()
-        user = request.user
-        
-
-        if es_admin_sucursal(user) and conductor.sucursal_id != user.sucursal_id:
-            raise PermissionDenied("No puedes despedir conductores de otra sucursal.")
-
-        conductor.activo = False
-        conductor.save(update_fields=["activo"])
-
-        # Libera el vehículo cerrando la asignación activa.
-        asignacion = conductor.asignaciones.filter(activa=True).first()
-        if asignacion:
-            asignacion.activa = False
-            asignacion.fecha_fin = timezone.localdate()
-            asignacion.save(update_fields=["activa", "fecha_fin"])
-
-        return Response(
-            self.get_serializer(conductor).data,
-            status=status.HTTP_200_OK
-        )
+def despedir(self, request, pk=None):
 
     @action(detail=True, methods=["post"], url_path="reactivar",
             permission_classes=[EsAdminSucursalOSuperAdmin])
@@ -970,6 +1113,7 @@ class VehiculoViewSet(viewsets.ModelViewSet):
             .select_related(
                 "sucursal",
                 "estado",
+                "tipo_vehiculo",
             )
             .prefetch_related(
                 Prefetch(
