@@ -146,14 +146,26 @@ class RegistroConductorView(APIView):
 
         conductor = serializer.save()
         usuario = conductor.usuario
+        vehiculo = getattr(
+            conductor,
+            "vehiculo_registrado",
+            None,
+        )
+
+        if vehiculo is None:
+            vehiculo = (
+                conductor.vehiculos_propios
+                .order_by("-fecha_registro")
+                .first()
+            )
 
         token, _ = Token.objects.get_or_create(user=usuario)
 
         return Response(
             {
                 "mensaje": (
-                    "Cuenta creada correctamente. "
-                    "El conductor está pendiente de aprobación."
+                    "Cuenta y vehículo registrados correctamente. "
+                    "Ambos se activarán cuando el conductor sea aprobado."
                 ),
                 "token": token.key,
                 "usuario": {
@@ -167,9 +179,22 @@ class RegistroConductorView(APIView):
                 "conductor": {
                     "id": conductor.id,
                     "sucursal_id": conductor.sucursal_id,
-                    "vehiculo_id": None,
+                    "vehiculo_id": vehiculo.id,
                     "activo": conductor.activo,
                     "estado_verificacion": conductor.estado_verificacion,
+                },
+                "vehiculo": {
+                    "id": vehiculo.id,
+                    "tipo_vehiculo_id": vehiculo.tipo_vehiculo_id,
+                    "numero": vehiculo.numero,
+                    "placa": vehiculo.placa,
+                    "marca": vehiculo.marca,
+                    "modelo": vehiculo.modelo,
+                    "anio": vehiculo.anio,
+                    "color": vehiculo.color,
+                    "estado_verificacion": (
+                        vehiculo.estado_verificacion
+                    ),
                 },
             },
             status=status.HTTP_201_CREATED,

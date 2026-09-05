@@ -1,4 +1,6 @@
 """Serializadores de cuentas móviles."""
+from datetime import date
+
 from django.contrib.auth.password_validation import (
     validate_password,
 )
@@ -9,7 +11,13 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework import serializers
 
-from App_taxi.models import Conductor, Rol, Usuario
+from App_taxi.models import (
+    Conductor,
+    Rol,
+    Usuario,
+    Vehiculo,
+)
+from apps.flota.models import TipoVehiculo
 
 from ..models import InvitacionConductor
 
@@ -357,6 +365,73 @@ class ActivarConductorSerializer(
         return conductor
     
 
+class RegistroVehiculoConductorSerializer(
+    serializers.Serializer
+):
+    tipo_vehiculo_id = serializers.PrimaryKeyRelatedField(
+        source="tipo_vehiculo",
+        queryset=TipoVehiculo.objects.filter(activo=True),
+    )
+    placa = serializers.CharField(max_length=20)
+    marca = serializers.CharField(max_length=50)
+    modelo = serializers.CharField(max_length=50)
+    anio = serializers.IntegerField(
+        min_value=1900,
+        max_value=date.today().year + 1,
+    )
+    color = serializers.CharField(
+        max_length=30,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    numero_motor = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    numero_chasis = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    tipo_combustible = serializers.CharField(
+        max_length=30,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    kilometraje_actual = serializers.IntegerField(
+        min_value=0,
+        required=False,
+        default=0,
+    )
+
+    def validate_placa(self, value):
+        placa = (
+            str(value)
+            .strip()
+            .upper()
+            .replace(" ", "")
+        )
+
+        if not placa:
+            raise serializers.ValidationError(
+                "La placa es obligatoria."
+            )
+
+        if Vehiculo.objects.filter(
+            placa__iexact=placa
+        ).exists():
+            raise serializers.ValidationError(
+                "Ya existe un vehículo registrado con esta placa."
+            )
+
+        return placa
+
+
 class RegistroConductorSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=100)
     apellido = serializers.CharField(max_length=100)
@@ -373,6 +448,7 @@ class RegistroConductorSerializer(serializers.Serializer):
         min_length=8,
         style={"input_type": "password"},
     )
+    vehiculo = RegistroVehiculoConductorSerializer()
 
     def validate_telefono(self, telefono):
         telefono = telefono.strip()
@@ -418,6 +494,7 @@ class RegistroConductorSerializer(serializers.Serializer):
 
         password = validated_data.pop("password")
         email = validated_data.pop("email", "")
+        vehiculo_data = validated_data.pop("vehiculo")
         telefono = validated_data["telefono"]
 
         rol_taxista = Rol.objects.get(codigo="taxista")
@@ -444,5 +521,44 @@ class RegistroConductorSerializer(serializers.Serializer):
             estado_verificacion="pendiente",
             activo=False,
         )
+
+        tipo_vehiculo = vehiculo_data.pop(
+            "tipo_vehiculo"
+        )
+        placa = vehiculo_data["placa"]
+
+        vehiculo = Vehiculo.objects.create(
+            sucursal=conductor.sucursal,
+            estado=None,
+            tipo_vehiculo=tipo_vehiculo,
+            tipo_propiedad="conductor",
+            propietario_conductor=conductor,
+            estado_verificacion="pendiente",
+            motivo_rechazo="",
+            numero=placa,
+            placa=placa,
+            marca=vehiculo_data["marca"],
+            modelo=vehiculo_data["modelo"],
+            anio=vehiculo_data["anio"],
+            color=vehiculo_data.get("color", ""),
+            numero_motor=vehiculo_data.get(
+                "numero_motor",
+                "",
+            ),
+            numero_chasis=vehiculo_data.get(
+                "numero_chasis",
+                "",
+            ),
+            tipo_combustible=vehiculo_data.get(
+                "tipo_combustible",
+                "",
+            ),
+            kilometraje_actual=vehiculo_data.get(
+                "kilometraje_actual",
+                0,
+            ),
+        )
+
+        conductor.vehiculo_registrado = vehiculo
 
         return conductor
