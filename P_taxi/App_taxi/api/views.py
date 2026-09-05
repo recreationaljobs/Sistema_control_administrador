@@ -316,20 +316,96 @@ class LoginView(APIView):
     throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
-        username = request.data.get("username")
+        identificador = str(
+            request.data.get("username", "")
+        ).strip()
         password = request.data.get("password")
 
-        if not username or not password:
+        if not identificador or not password:
             return Response(
                 {
-                    "detail": "Debes ingresar usuario y contraseña."
+                    "detail": (
+                        "Debes ingresar usuario, correo o teléfono "
+                        "y contraseña."
+                    )
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        usuario_encontrado = (
+            Usuario.objects
+            .filter(
+                username__iexact=identificador
+            )
+            .first()
+        )
+
+        if usuario_encontrado is None and "@" in identificador:
+            usuario_encontrado = (
+                Usuario.objects
+                .filter(
+                    email__iexact=identificador
+                )
+                .exclude(email="")
+                .order_by("id")
+                .first()
+            )
+
+        if usuario_encontrado is None:
+            digitos = "".join(
+                caracter
+                for caracter in identificador
+                if caracter.isdigit()
+            )
+
+            variantes_telefono = {
+                identificador,
+            }
+
+            if digitos:
+                variantes_telefono.update({
+                    digitos,
+                    f"+{digitos}",
+                })
+
+                if len(digitos) == 8:
+                    variantes_telefono.update({
+                        f"505{digitos}",
+                        f"+505{digitos}",
+                    })
+
+                if (
+                    len(digitos) == 11
+                    and digitos.startswith("505")
+                ):
+                    variantes_telefono.update({
+                        digitos[-8:],
+                        f"+{digitos}",
+                    })
+
+            consulta_telefono = Q()
+
+            for telefono in variantes_telefono:
+                consulta_telefono |= Q(
+                    telefono__iexact=telefono
+                )
+
+            usuario_encontrado = (
+                Usuario.objects
+                .filter(consulta_telefono)
+                .order_by("id")
+                .first()
+            )
+
+        username_autenticacion = (
+            usuario_encontrado.username
+            if usuario_encontrado
+            else identificador
+        )
+
         user = authenticate(
             request=request,
-            username=username,
+            username=username_autenticacion,
             password=password
         )
 

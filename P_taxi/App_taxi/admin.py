@@ -5,6 +5,11 @@ from .api.services import procesar_liquidacion_manual
 from django.db import transaction
 from django.utils import timezone
 
+from .verification_services import (
+    aprobar_conductor_completo,
+    cambiar_estado_conductor_completo,
+)
+
 from .models import (
     Sucursal,
     Rol,
@@ -249,19 +254,36 @@ class ConductorAdmin(admin.ModelAdmin):
         request,
         queryset,
     ):
-        cantidad = queryset.update(
-            estado_verificacion="aprobado",
-            activo=True,
-        )
+        cantidad = 0
+        errores = []
 
-        self.message_user(
-            request,
-            (
-                f"{cantidad} conductor(es) "
-                "aprobado(s) correctamente."
-            ),
-            level="success",
-        )
+        for conductor in queryset:
+            try:
+                aprobar_conductor_completo(
+                    conductor.id
+                )
+                cantidad += 1
+            except Exception as error:
+                errores.append(
+                    f"{conductor}: {error}"
+                )
+
+        if cantidad:
+            self.message_user(
+                request,
+                (
+                    f"{cantidad} conductor(es), vehículo(s) "
+                    "y asignación(es) aprobados correctamente."
+                ),
+                level=messages.SUCCESS,
+            )
+
+        for error in errores:
+            self.message_user(
+                request,
+                error,
+                level=messages.ERROR,
+            )
 
     @admin.action(
         description="Rechazar conductores seleccionados"
@@ -271,10 +293,14 @@ class ConductorAdmin(admin.ModelAdmin):
         request,
         queryset,
     ):
-        cantidad = queryset.update(
-            estado_verificacion="rechazado",
-            activo=False,
-        )
+        cantidad = 0
+
+        for conductor in queryset:
+            cambiar_estado_conductor_completo(
+                conductor.id,
+                "rechazado",
+            )
+            cantidad += 1
 
         self.message_user(
             request,
@@ -293,10 +319,14 @@ class ConductorAdmin(admin.ModelAdmin):
         request,
         queryset,
     ):
-        cantidad = queryset.update(
-            estado_verificacion="suspendido",
-            activo=False,
-        )
+        cantidad = 0
+
+        for conductor in queryset:
+            cambiar_estado_conductor_completo(
+                conductor.id,
+                "suspendido",
+            )
+            cantidad += 1
 
         self.message_user(
             request,
@@ -315,10 +345,14 @@ class ConductorAdmin(admin.ModelAdmin):
         request,
         queryset,
     ):
-        cantidad = queryset.update(
-            estado_verificacion="pendiente",
-            activo=False,
-        )
+        cantidad = 0
+
+        for conductor in queryset:
+            cambiar_estado_conductor_completo(
+                conductor.id,
+                "pendiente",
+            )
+            cantidad += 1
 
         self.message_user(
             request,
@@ -336,16 +370,41 @@ class ConductorAdmin(admin.ModelAdmin):
         form,
         change,
     ):
-        obj.activo = (
-            obj.estado_verificacion
-            == "aprobado"
-        )
+        estado = obj.estado_verificacion
 
+        if not change:
+            obj.activo = estado == "aprobado"
+            super().save_model(
+                request,
+                obj,
+                form,
+                change,
+            )
+            return
+
+        if estado == "aprobado":
+            obj.activo = False
+            obj.estado_verificacion = "pendiente"
+            super().save_model(
+                request,
+                obj,
+                form,
+                change,
+            )
+            aprobar_conductor_completo(obj.id)
+            obj.refresh_from_db()
+            return
+
+        obj.activo = False
         super().save_model(
             request,
             obj,
             form,
             change,
+        )
+        cambiar_estado_conductor_completo(
+            obj.id,
+            estado,
         )
 
 
