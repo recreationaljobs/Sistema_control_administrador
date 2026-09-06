@@ -176,6 +176,8 @@ def actualizar_ubicacion(
 
     if viaje_actual:
         estado.disponible = False
+    else:
+        estado.disponible = True
 
     estado.save(
         update_fields=[
