@@ -9,12 +9,12 @@ from math import (
     sqrt,
 )
 
-from django.utils import timezone
-from rest_framework import serializers, status
-from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework.views import APIView
+from django.utils import timezone # pyright: ignore[reportMissingModuleSource]
+from rest_framework import serializers, status # type: ignore
+from rest_framework.exceptions import ValidationError # type: ignore
+from rest_framework.permissions import IsAuthenticated # pyright: ignore[reportMissingImports]
+from rest_framework.response import Response # type: ignore
+from rest_framework.views import APIView # pyright: ignore[reportMissingImports]
 
 from App_taxi.models import AsignacionVehiculo
 from apps.pasajeros.models import Pasajero
@@ -22,7 +22,7 @@ from apps.pasajeros.models import Pasajero
 from ..models import EstadoConductorTiempoReal
 
 
-RADIO_MAXIMO_KM = 20
+RADIO_MAXIMO_KM = 30
 SEGUNDOS_UBICACION_RECIENTE = 60
 
 
@@ -45,7 +45,7 @@ class ConsultarConductoresCercanosSerializer(
         max_value=180,
     )
     radio_km = serializers.DecimalField(
-        max_digits=5,
+        max_digits=30,
         decimal_places=2,
         min_value=1,
         max_value=RADIO_MAXIMO_KM,

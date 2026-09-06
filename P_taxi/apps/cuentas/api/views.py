@@ -1,16 +1,23 @@
 """Vistas de cuentas móviles."""
-from rest_framework import status
-from rest_framework.authtoken.models import (
+from rest_framework import status # type: ignore
+from rest_framework.authtoken.models import ( # type: ignore
     Token,
 )
 
-from rest_framework.permissions import (
+from rest_framework.permissions import ( # type: ignore
     AllowAny,IsAuthenticated,
 )
-from rest_framework.response import Response
+from rest_framework.response import Response # type: ignore
 
-from rest_framework.throttling import AnonRateThrottle, SimpleRateThrottle
-from rest_framework.views import APIView
+from rest_framework.throttling import AnonRateThrottle, SimpleRateThrottle # type: ignore
+from rest_framework.views import APIView # type: ignore
+from django.core.exceptions import ValidationError as DjangoValidationError # type: ignore
+from django.db import transaction # type: ignore
+
+from rest_framework.exceptions import ValidationError # pyright: ignore[reportMissingImports]
+from App_taxi.verification_services import (
+    aprobar_conductor_completo,
+)
 
 from App_taxi.api.serializers import (
     UsuarioSerializer,
@@ -141,51 +148,80 @@ class RegistroConductorView(APIView):
     throttle_classes = [AnonRateThrottle]
 
     def post(self, request):
-        serializer = RegistroConductorSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        conductor = serializer.save()
-        usuario = conductor.usuario
-        vehiculo = getattr(
-            conductor,
-            "vehiculo_registrado",
-            None,
+        serializer = RegistroConductorSerializer(
+            data=request.data
         )
 
-        if vehiculo is None:
-            vehiculo = (
-                conductor.vehiculos_propios
-                .order_by("-fecha_registro")
-                .first()
-            )
+        serializer.is_valid(
+            raise_exception=True
+        )
 
-        token, _ = Token.objects.get_or_create(user=usuario)
+        try:
+            with transaction.atomic():
+                # 1. Crear usuario, conductor y vehículo.
+                conductor = serializer.save()
+
+                # 2. Aprobar inmediatamente todo el registro.
+                conductor, vehiculo, asignacion = (
+                    aprobar_conductor_completo(
+                        conductor.id
+                    )
+                )
+
+                usuario = conductor.usuario
+
+                # 3. Crear token.
+                token, _ = Token.objects.get_or_create(
+                    user=usuario
+                )
+
+        except DjangoValidationError as error:
+            raise ValidationError(
+                {
+                    "detail": (
+                        error.messages[0]
+                        if error.messages
+                        else str(error)
+                    )
+                }
+            )
 
         return Response(
             {
                 "mensaje": (
-                    "Cuenta y vehículo registrados correctamente. "
-                    "Ambos se activarán cuando el conductor sea aprobado."
+                    "Cuenta creada correctamente. "
+                    "El conductor y su vehículo "
+                    "han sido aprobados y ya pueden trabajar."
                 ),
                 "token": token.key,
+
                 "usuario": {
                     "id": usuario.id,
                     "username": usuario.username,
                     "nombre": usuario.first_name,
                     "apellido": usuario.last_name,
                     "telefono": usuario.telefono,
-                    "rol": usuario.rol.codigo if usuario.rol else None,
+                    "rol": (
+                        usuario.rol.codigo
+                        if usuario.rol
+                        else None
+                    ),
                 },
+
                 "conductor": {
                     "id": conductor.id,
                     "sucursal_id": conductor.sucursal_id,
-                    "vehiculo_id": vehiculo.id,
                     "activo": conductor.activo,
-                    "estado_verificacion": conductor.estado_verificacion,
+                    "estado_verificacion": (
+                        conductor.estado_verificacion
+                    ),
                 },
+
                 "vehiculo": {
                     "id": vehiculo.id,
-                    "tipo_vehiculo_id": vehiculo.tipo_vehiculo_id,
+                    "tipo_vehiculo_id": (
+                        vehiculo.tipo_vehiculo_id
+                    ),
                     "numero": vehiculo.numero,
                     "placa": vehiculo.placa,
                     "marca": vehiculo.marca,
@@ -194,6 +230,22 @@ class RegistroConductorView(APIView):
                     "color": vehiculo.color,
                     "estado_verificacion": (
                         vehiculo.estado_verificacion
+                    ),
+                    "estado": (
+                        vehiculo.estado.codigo
+                        if vehiculo.estado
+                        else None
+                    ),
+                },
+
+                "asignacion": {
+                    "id": asignacion.id,
+                    "activa": asignacion.activa,
+                    "vehiculo_id": (
+                        asignacion.vehiculo_id
+                    ),
+                    "conductor_id": (
+                        asignacion.conductor_id
                     ),
                 },
             },

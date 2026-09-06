@@ -220,7 +220,7 @@ class SolicitarViajeSerializer(
     tarifa_propuesta = serializers.DecimalField(
         max_digits=12,
         decimal_places=2,
-        min_value=1,
+        min_value=10,
         required=False,
         allow_null=True,
         help_text=(
@@ -309,7 +309,7 @@ class SolicitarViajeSerializer(
                 **validated_data
             )
         except Exception as error:
-            from django.core.exceptions import (
+            from django.core.exceptions import ( # type: ignore
                 ValidationError as DjangoValidationError,
             )
 

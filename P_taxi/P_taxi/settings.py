@@ -80,6 +80,7 @@ ALLOWED_HOSTS = [
             "127.0.0.1,"
             "localhost,"
             "169.58.2.183,"
+            "10.167.83.253,"
             "taxiadmin.servitaxitortuguero.com"
         ),
     ).split(",")

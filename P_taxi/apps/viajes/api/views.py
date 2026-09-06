@@ -46,6 +46,7 @@ from ..services import (
     cambiar_estado_viaje_conductor,
     cancelar_viaje_pasajero,
     liberar_viaje_por_conductor,
+    actualizar_precio_viaje,
 )
 from .serializers import (
     CambiarEstadoViajeSerializer,
@@ -631,6 +632,73 @@ class MiViajeActivoView(APIView):
             status=status.HTTP_200_OK,
         )
 
+
+class ActualizarPrecioViajePasajeroView(
+    APIView
+):
+    permission_classes = [
+        IsAuthenticated,
+    ]
+
+    def patch(
+        self,
+        request,
+        viaje_id,
+    ):
+        pasajero = (
+            Pasajero.objects
+            .filter(
+                usuario=request.user
+            )
+            .first()
+        )
+
+        if not pasajero:
+            raise ValidationError(
+                "La cuenta no tiene un "
+                "perfil de pasajero."
+            )
+
+        nueva_tarifa = request.data.get(
+            "tarifa_propuesta"
+        )
+
+        if nueva_tarifa is None:
+            raise ValidationError(
+                {
+                    "tarifa_propuesta": (
+                        "Debes enviar el nuevo precio."
+                    )
+                }
+            )
+
+        try:
+            viaje = actualizar_precio_viaje(
+                viaje_id=viaje_id,
+                pasajero=pasajero,
+                nueva_tarifa=nueva_tarifa,
+            )
+        except DjangoValidationError as error:
+            raise ValidationError(
+                error.messages
+            )
+
+        viaje = obtener_viaje_detallado(
+            viaje.id
+        )
+
+        return Response(
+            {
+                "mensaje": (
+                    "El precio del viaje fue "
+                    "actualizado correctamente."
+                ),
+                "viaje": ViajeSerializer(
+                    viaje
+                ).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 class CancelarViajePasajeroView(
     APIView

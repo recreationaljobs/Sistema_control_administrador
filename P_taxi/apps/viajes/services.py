@@ -107,10 +107,9 @@ def solicitar_viaje(
             str(tarifa_propuesta)
         ).quantize(Decimal("0.01"))
 
-        if tarifa_acordada <= 0:
+        if tarifa_acordada < Decimal("10.00"):
             raise ValidationError(
-                "La tarifa propuesta debe ser "
-                "mayor que cero."
+                "La tarifa propuesta mínima es C$10.00."
             )
 
     viaje = Viaje.objects.create(
@@ -806,6 +805,119 @@ def liberar_viaje_por_conductor(
         ),
         tipo="conductor_libero_viaje",
         viaje_id=viaje.id,
+    )
+
+    return viaje
+
+
+@transaction.atomic
+def actualizar_precio_viaje(
+    viaje_id,
+    pasajero,
+    nueva_tarifa,
+):
+    pasajero = (
+        Pasajero.objects
+        .select_for_update()
+        .select_related("usuario")
+        .get(pk=pasajero.pk)
+    )
+
+    try:
+        viaje = (
+            Viaje.objects
+            .select_for_update()
+            .select_related(
+                "pasajero",
+                "tipo_vehiculo",
+            )
+            .get(pk=viaje_id)
+        )
+    except Viaje.DoesNotExist:
+        raise ValidationError(
+            "El viaje solicitado no existe."
+        )
+
+    if viaje.pasajero_id != pasajero.id:
+        raise ValidationError(
+            "Este viaje no pertenece "
+            "al pasajero autenticado."
+        )
+
+    if viaje.estado != "buscando_conductor":
+        raise ValidationError(
+            "El precio solo puede modificarse "
+            "mientras se busca un conductor."
+        )
+
+    try:
+        nueva_tarifa = Decimal(
+            str(nueva_tarifa)
+        ).quantize(
+            Decimal("0.01")
+        )
+    except Exception:
+        raise ValidationError(
+            "Ingresa un precio válido."
+        )
+
+    if nueva_tarifa <= 0:
+        raise ValidationError(
+            "El precio debe ser mayor que cero."
+        )
+
+    precio_actual = (
+        viaje.tarifa_acordada
+        if viaje.tarifa_acordada is not None
+        else viaje.tarifa_estimada
+    )
+
+    if precio_actual is not None:
+        precio_actual = Decimal(
+            str(precio_actual)
+        ).quantize(
+            Decimal("0.01")
+        )
+
+        if nueva_tarifa <= precio_actual:
+            raise ValidationError(
+                "El nuevo precio debe ser mayor "
+                "que el precio actual."
+            )
+
+    # Regla mínima para Mototaxi.
+    if (
+        viaje.tipo_vehiculo
+        and viaje.tipo_vehiculo.codigo.lower()
+        == "mototaxi"
+        and nueva_tarifa < Decimal("10.00")
+    ):
+        raise ValidationError(
+            "El precio mínimo para Mototaxi "
+            "es C$10."
+        )
+
+    tarifa_anterior = viaje.tarifa_acordada
+
+    viaje.tarifa_acordada = nueva_tarifa
+
+    viaje.save(
+        update_fields=[
+            "tarifa_acordada",
+            "fecha_actualizacion",
+        ]
+    )
+
+    HistorialEstadoViaje.objects.create(
+        viaje=viaje,
+        estado_anterior=viaje.estado,
+        estado_nuevo=viaje.estado,
+        usuario=pasajero.usuario,
+        observacion=(
+            "El pasajero actualizó el precio "
+            f"de C$ {tarifa_anterior or viaje.tarifa_estimada} "
+            f"a C$ {nueva_tarifa}."
+        ),
     )
 
     return viaje

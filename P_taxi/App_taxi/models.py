@@ -776,6 +776,44 @@ class ConfiguracionSistema(models.Model):
 
     moneda = models.CharField(max_length=10, default="C$")
 
+
+        # ========================================================
+    # CONTROL DE VERSION DE ZENDA ANDROID
+    # ========================================================
+
+    app_android_version = models.CharField(
+        max_length=30,
+        default="1.0.0",
+        help_text="Versión visible publicada en Play Store.",
+    )
+
+    app_android_build = models.PositiveIntegerField(
+        default=1,
+        help_text="Build más reciente publicado en Play Store.",
+    )
+
+    app_android_build_minimo = models.PositiveIntegerField(
+        default=1,
+        help_text=(
+            "Build mínimo permitido. "
+            "Los builds inferiores deberán actualizar."
+        ),
+    )
+
+    app_actualizacion_mensaje = models.CharField(
+        max_length=255,
+        default=(
+            "Hay una nueva versión de Zenda disponible. "
+            "Actualiza para continuar."
+        ),
+    )
+
+    app_play_store_url = models.URLField(
+        max_length=500,
+        blank=True,
+        default="",
+    )
+
     class Meta:
         verbose_name = "Configuración del sistema"
         verbose_name_plural = "Configuraciones del sistema"

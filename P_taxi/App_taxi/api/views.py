@@ -319,130 +319,150 @@ class LoginView(APIView):
         identificador = str(
             request.data.get("username", "")
         ).strip()
-        password = request.data.get("password")
+
+        password = str(
+            request.data.get("password", "")
+        )
 
         if not identificador or not password:
             return Response(
                 {
                     "detail": (
-                        "Debes ingresar usuario, correo o teléfono "
-                        "y contraseña."
+                        "Debes ingresar usuario, correo "
+                        "o teléfono y contraseña."
                     )
                 },
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        usuario_encontrado = (
-            Usuario.objects
-            .filter(
-                username__iexact=identificador
-            )
-            .first()
+        candidatos = Usuario.objects.none()
+
+        # Buscar por username
+        candidatos = candidatos | Usuario.objects.filter(
+            username__iexact=identificador
         )
 
-        if usuario_encontrado is None and "@" in identificador:
-            usuario_encontrado = (
-                Usuario.objects
-                .filter(
-                    email__iexact=identificador
-                )
-                .exclude(email="")
-                .order_by("id")
-                .first()
-            )
+        # Buscar por correo
+        candidatos = candidatos | Usuario.objects.filter(
+            email__iexact=identificador
+        ).exclude(
+            email=""
+        )
 
-        if usuario_encontrado is None:
-            digitos = "".join(
-                caracter
-                for caracter in identificador
-                if caracter.isdigit()
-            )
+        # Buscar por teléfono
+        digitos = "".join(
+            c for c in identificador
+            if c.isdigit()
+        )
 
-            variantes_telefono = {
-                identificador,
-            }
+        variantes_telefono = {
+            identificador,
+        }
 
-            if digitos:
-                variantes_telefono.update({
-                    digitos,
-                    f"+{digitos}",
-                })
+        if digitos:
+            variantes_telefono.add(digitos)
+            variantes_telefono.add(f"+{digitos}")
 
-                if len(digitos) == 8:
-                    variantes_telefono.update({
-                        f"505{digitos}",
-                        f"+505{digitos}",
-                    })
-
-                if (
-                    len(digitos) == 11
-                    and digitos.startswith("505")
-                ):
-                    variantes_telefono.update({
-                        digitos[-8:],
-                        f"+{digitos}",
-                    })
-
-            consulta_telefono = Q()
-
-            for telefono in variantes_telefono:
-                consulta_telefono |= Q(
-                    telefono__iexact=telefono
+            if len(digitos) == 8:
+                variantes_telefono.add(
+                    f"505{digitos}"
                 )
 
-            usuario_encontrado = (
-                Usuario.objects
-                .filter(consulta_telefono)
-                .order_by("id")
-                .first()
+                variantes_telefono.add(
+                    f"+505{digitos}"
+                )
+
+            if (
+                len(digitos) == 11
+                and digitos.startswith("505")
+            ):
+                variantes_telefono.add(
+                    digitos[-8:]
+                )
+
+                variantes_telefono.add(
+                    f"+{digitos}"
+                )
+
+        consulta_telefono = Q()
+
+        for telefono in variantes_telefono:
+            consulta_telefono |= Q(
+                telefono__iexact=telefono
             )
 
-        username_autenticacion = (
-            usuario_encontrado.username
-            if usuario_encontrado
-            else identificador
+        candidatos = (
+            candidatos
+            | Usuario.objects.filter(
+                consulta_telefono
+            )
         )
 
-        user = authenticate(
-            request=request,
-            username=username_autenticacion,
-            password=password
+        candidatos = (
+            candidatos
+            .select_related(
+                "rol",
+                "sucursal",
+            )
+            .distinct()
+            .order_by("id")
         )
 
-        if not user:
+        user = None
+
+        for candidato in candidatos:
+            if candidato.check_password(password):
+                user = candidato
+                break
+
+        if user is None:
             return Response(
                 {
-                    "detail": "Usuario o contraseña incorrectos."
+                    "detail": (
+                        "Usuario, correo o teléfono "
+                        "o contraseña incorrectos."
+                    )
                 },
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if not user.is_active:
             return Response(
                 {
-                    "detail": "Este usuario está inactivo. Contacta al administrador."
+                    "detail": (
+                        "Este usuario está inactivo. "
+                        "Contacta al administrador."
+                    )
                 },
-                status=status.HTTP_403_FORBIDDEN
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         if not user.rol:
             return Response(
                 {
-                    "detail": "Este usuario no tiene un rol asignado."
+                    "detail": (
+                        "Este usuario no tiene "
+                        "un rol asignado."
+                    )
                 },
-                status=status.HTTP_403_FORBIDDEN
+                status=status.HTTP_403_FORBIDDEN,
             )
 
-        if user.rol.codigo == "admin_sucursal" and not user.sucursal:
+        if (
+            user.rol.codigo == "admin_sucursal"
+            and not user.sucursal
+        ):
             return Response(
                 {
-                    "detail": "Este usuario no tiene una sucursal asignada."
+                    "detail": (
+                        "Este usuario no tiene "
+                        "una sucursal asignada."
+                    )
                 },
-                status=status.HTTP_403_FORBIDDEN
+                status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Rota el token para invalidar credenciales antiguas robadas.
-        token, created = Token.objects.get_or_create(
+        token, _ = Token.objects.get_or_create(
             user=user
         )
 
@@ -464,7 +484,6 @@ class LoginView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 

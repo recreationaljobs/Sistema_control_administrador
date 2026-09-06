@@ -1,6 +1,9 @@
-from django.urls import include, path
+from django.urls import include, path # pyright: ignore[reportMissingModuleSource]
 
-from .common.views import EstadoAPIView
+from .common.views import (
+    EstadoAPIView,
+    VersionAppAPIView,
+)
 
 
 urlpatterns = [
@@ -50,5 +53,10 @@ urlpatterns = [
         include(
             "apps.seguimiento.api.urls"
         ),
+    ),
+        path(
+        "version-app/",
+        VersionAppAPIView.as_view(),
+        name="version-app",
     ),
 ]

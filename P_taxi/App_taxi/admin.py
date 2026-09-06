@@ -800,8 +800,39 @@ class ConfiguracionSistemaAdmin(admin.ModelAdmin):
         "intervalo_mantenimiento_km",
         "alerta_previa_km",
         "moneda",
+        "app_android_version",
+        "app_android_build",
+        "app_android_build_minimo",
     )
 
+    fieldsets = (
+        (
+            "Configuración general",
+            {
+                "fields": (
+                    "sucursal",
+                    "porcentaje_pago_conductor",
+                    "intervalo_cambio_aceite_km",
+                    "intervalo_mantenimiento_km",
+                    "alerta_previa_km",
+                    "km_aviso_mantenimiento",
+                    "moneda",
+                )
+            },
+        ),
+        (
+            "Actualización de Zenda",
+            {
+                "fields": (
+                    "app_android_version",
+                    "app_android_build",
+                    "app_android_build_minimo",
+                    "app_actualizacion_mensaje",
+                    "app_play_store_url",
+                )
+            },
+        ),
+    )
 
 admin.site.register(EstadoVehiculo)
 admin.site.register(EstadoJornada)

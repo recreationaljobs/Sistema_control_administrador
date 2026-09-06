@@ -28,6 +28,7 @@ from .pagos_views import (
 )
 from .views import (
     AceptarViajeView,
+    ActualizarPrecioViajePasajeroView,
     CambiarEstadoViajeView,
     CancelarViajePasajeroView,
     LiberarViajeConductorView,
@@ -145,4 +146,9 @@ urlpatterns = [
         DetalleViajeView.as_view(),
         name="detalle-viaje",
     ),
+    path(
+    "<uuid:viaje_id>/actualizar-precio/",
+    ActualizarPrecioViajePasajeroView.as_view(),
+    name="actualizar-precio-viaje",
+),
 ]
