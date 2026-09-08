@@ -141,11 +141,15 @@ class Viaje(models.Model):
 
     destino_direccion = models.CharField(
         max_length=255,
+        blank=True,
+        default="",
     )
 
     destino_latitud = models.DecimalField(
         max_digits=10,
         decimal_places=7,
+        null=True,
+        blank=True,
         validators=[
             MinValueValidator(
                 Decimal("-90")
@@ -159,6 +163,8 @@ class Viaje(models.Model):
     destino_longitud = models.DecimalField(
         max_digits=10,
         decimal_places=7,
+        null=True,
+        blank=True,
         validators=[
             MinValueValidator(
                 Decimal("-180")

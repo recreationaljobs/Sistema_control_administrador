@@ -51,9 +51,9 @@ def solicitar_viaje(
     origen_direccion,
     origen_latitud,
     origen_longitud,
-    destino_direccion,
-    destino_latitud,
-    destino_longitud,
+    destino_direccion="",
+    destino_latitud=None,
+    destino_longitud=None,
     tarifa_propuesta=None,
     metodo_pago="efectivo",
     notas_pasajero="",
@@ -87,20 +87,44 @@ def solicitar_viaje(
             "no está disponible."
         )
 
-    estimacion = calcular_tarifa_estimada(
-        tipo_vehiculo=tipo_vehiculo,
-        origen_latitud=origen_latitud,
-        origen_longitud=origen_longitud,
-        destino_latitud=destino_latitud,
-        destino_longitud=destino_longitud,
-        sucursal=None,
+    tiene_destino = (
+        destino_latitud is not None
+        and destino_longitud is not None
     )
 
-    tarifa_estimada = Decimal(
-        str(estimacion["tarifa_estimada"])
-    ).quantize(Decimal("0.01"))
+    estimacion = None
+    tarifa_estimada = None
+    distancia_estimada_km = None
+    duracion_estimada_minutos = None
+
+    if tiene_destino:
+        estimacion = calcular_tarifa_estimada(
+            tipo_vehiculo=tipo_vehiculo,
+            origen_latitud=origen_latitud,
+            origen_longitud=origen_longitud,
+            destino_latitud=destino_latitud,
+            destino_longitud=destino_longitud,
+            sucursal=None,
+        )
+
+        tarifa_estimada = Decimal(
+            str(estimacion["tarifa_estimada"])
+        ).quantize(Decimal("0.01"))
+
+        distancia_estimada_km = estimacion[
+            "distancia_estimada_km"
+        ]
+        duracion_estimada_minutos = estimacion[
+            "duracion_estimada_minutos"
+        ]
 
     if tarifa_propuesta is None:
+        if tarifa_estimada is None:
+            raise ValidationError(
+                "Si no seleccionas un destino, debes indicar "
+                "el precio que deseas pagar."
+            )
+
         tarifa_acordada = tarifa_estimada
     else:
         tarifa_acordada = Decimal(
@@ -119,15 +143,11 @@ def solicitar_viaje(
         origen_direccion=origen_direccion,
         origen_latitud=origen_latitud,
         origen_longitud=origen_longitud,
-        destino_direccion=destino_direccion,
+        destino_direccion=destino_direccion or "",
         destino_latitud=destino_latitud,
         destino_longitud=destino_longitud,
-        distancia_estimada_km=estimacion[
-            "distancia_estimada_km"
-        ],
-        duracion_estimada_minutos=estimacion[
-            "duracion_estimada_minutos"
-        ],
+        distancia_estimada_km=distancia_estimada_km,
+        duracion_estimada_minutos=duracion_estimada_minutos,
         tarifa_estimada=tarifa_estimada,
         tarifa_acordada=tarifa_acordada,
         metodo_pago=metodo_pago,

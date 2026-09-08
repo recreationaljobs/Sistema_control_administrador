@@ -201,6 +201,9 @@ class SolicitarViajeSerializer(
 
     destino_direccion = serializers.CharField(
         max_length=255,
+        required=False,
+        allow_blank=True,
+        default="",
     )
 
     destino_latitud = serializers.DecimalField(
@@ -208,6 +211,9 @@ class SolicitarViajeSerializer(
         decimal_places=7,
         min_value=-90,
         max_value=90,
+        required=False,
+        allow_null=True,
+        default=None,
     )
 
     destino_longitud = serializers.DecimalField(
@@ -215,6 +221,9 @@ class SolicitarViajeSerializer(
         decimal_places=7,
         min_value=-180,
         max_value=180,
+        required=False,
+        allow_null=True,
+        default=None,
     )
 
     tarifa_propuesta = serializers.DecimalField(
@@ -266,16 +275,48 @@ class SolicitarViajeSerializer(
             attrs["origen_longitud"],
         )
 
-        destino = (
-            attrs["destino_latitud"],
-            attrs["destino_longitud"],
-        )
+        destino_latitud = attrs.get("destino_latitud")
+        destino_longitud = attrs.get("destino_longitud")
 
-        if origen == destino:
+        if (
+            destino_latitud is None
+            and destino_longitud is not None
+        ) or (
+            destino_latitud is not None
+            and destino_longitud is None
+        ):
             raise serializers.ValidationError({
                 "destino_direccion": (
-                    "El destino debe ser diferente "
-                    "del punto de origen."
+                    "Debes enviar latitud y longitud "
+                    "del destino juntas, o no enviar ninguna."
+                )
+            })
+
+        if (
+            destino_latitud is not None
+            and destino_longitud is not None
+        ):
+            destino = (
+                destino_latitud,
+                destino_longitud,
+            )
+
+            if origen == destino:
+                raise serializers.ValidationError({
+                    "destino_direccion": (
+                        "El destino debe ser diferente "
+                        "del punto de origen."
+                    )
+                })
+
+        if (
+            destino_latitud is None
+            and attrs.get("tarifa_propuesta") is None
+        ):
+            raise serializers.ValidationError({
+                "tarifa_propuesta": (
+                    "Si no seleccionas un destino, "
+                    "debes indicar el precio que deseas pagar."
                 )
             })
 
