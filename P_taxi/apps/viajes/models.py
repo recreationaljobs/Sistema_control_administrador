@@ -3,12 +3,12 @@
 import uuid
 from decimal import Decimal
 
-from django.conf import settings
-from django.core.validators import (
+from django.conf import settings # pyright: ignore[reportMissingModuleSource] # pyright: ignore[reportMissingModuleSource]
+from django.core.validators import ( # type: ignore
     MaxValueValidator,
     MinValueValidator,
 )
-from django.db import models
+from django.db import models # pyright: ignore[reportMissingModuleSource]
 
 
 class Viaje(models.Model):
@@ -92,6 +92,14 @@ class Viaje(models.Model):
         "flota.TipoVehiculo",
         on_delete=models.PROTECT,
         related_name="viajes",
+    )
+
+    cantidad_pasajeros = models.PositiveSmallIntegerField(
+        default=1,
+        validators=[
+            MinValueValidator(1),
+            MaxValueValidator(4),
+        ],
     )
 
     sucursal = models.ForeignKey(

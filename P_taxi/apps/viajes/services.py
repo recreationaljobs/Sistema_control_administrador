@@ -31,6 +31,7 @@ from .models import (
     Viaje,
 )
 from .notificaciones import (
+    programar_notificacion_nuevo_viaje,
     programar_notificacion_viaje,
 )
 
@@ -56,6 +57,7 @@ def solicitar_viaje(
     destino_longitud=None,
     tarifa_propuesta=None,
     metodo_pago="efectivo",
+    cantidad_pasajeros=1,
     notas_pasajero="",
 ):
     pasajero = (
@@ -85,6 +87,38 @@ def solicitar_viaje(
         raise ValidationError(
             "El tipo de vehículo seleccionado "
             "no está disponible."
+        )
+
+    codigo_tipo = str(
+        tipo_vehiculo.codigo or ""
+    ).strip().lower()
+
+    if codigo_tipo not in {
+        "taxi",
+        "mototaxi",
+    }:
+        cantidad_pasajeros = 1
+
+    cantidad_pasajeros = int(
+        cantidad_pasajeros or 1
+    )
+
+    capacidad_pasajeros = max(
+        int(
+            tipo_vehiculo.capacidad_pasajeros
+            or 1
+        ),
+        1,
+    )
+
+    if (
+        cantidad_pasajeros < 1
+        or cantidad_pasajeros
+        > capacidad_pasajeros
+    ):
+        raise ValidationError(
+            "La cantidad de pasajeros debe estar "
+            f"entre 1 y {capacidad_pasajeros}."
         )
 
     tiene_destino = (
@@ -139,6 +173,7 @@ def solicitar_viaje(
     viaje = Viaje.objects.create(
         pasajero=pasajero,
         tipo_vehiculo=tipo_vehiculo,
+        cantidad_pasajeros=cantidad_pasajeros,
         estado="buscando_conductor",
         origen_direccion=origen_direccion,
         origen_latitud=origen_latitud,
@@ -164,6 +199,10 @@ def solicitar_viaje(
         ),
         latitud=origen_latitud,
         longitud=origen_longitud,
+    )
+
+    programar_notificacion_nuevo_viaje(
+        viaje_id=viaje.id,
     )
 
     return viaje

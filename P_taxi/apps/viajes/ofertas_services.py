@@ -6,11 +6,11 @@ from decimal import (
     ROUND_HALF_UP,
 )
 
-from django.core.exceptions import (
+from django.core.exceptions import ( # type: ignore
     ValidationError,
 )
-from django.db import transaction
-from django.utils import timezone
+from django.db import transaction # pyright: ignore[reportMissingModuleSource]
+from django.utils import timezone # pyright: ignore[reportMissingModuleSource]
 from .services import aceptar_viaje
 
 from App_taxi.models import (
@@ -31,7 +31,6 @@ from .notificaciones import (
 
 
 DOS_DECIMALES = Decimal("0.01")
-PORCENTAJE_MAXIMO_ADICIONAL = Decimal("50")
 SEGUNDOS_VIGENCIA_OFERTA = 25
 
 
@@ -170,33 +169,9 @@ def crear_contraoferta(
         rounding=ROUND_HALF_UP,
     )
 
-    if monto <= tarifa_original:
+    if monto <= Decimal("0"):
         raise ValidationError(
-            "La contraoferta debe ser mayor "
-            "que el precio publicado por el "
-            "pasajero."
-        )
-
-    limite_maximo = (
-        tarifa_original
-        * (
-            Decimal("1")
-            + (
-                PORCENTAJE_MAXIMO_ADICIONAL
-                / Decimal("100")
-            )
-        )
-    ).quantize(
-        DOS_DECIMALES,
-        rounding=ROUND_HALF_UP,
-    )
-
-    if monto > limite_maximo:
-        raise ValidationError(
-            (
-                "La contraoferta no puede superar "
-                f"C$ {limite_maximo}."
-            )
+            "La contraoferta debe ser mayor que C$ 0.00."
         )
 
     oferta = OfertaViaje.objects.create(

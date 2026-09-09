@@ -1,0 +1,94 @@
+apps/viajes/api/serializers.py:339:                    "no están disponibles."
+apps/viajes/api/serializers.py:367:class ViajeDisponibleSerializer(
+apps/viajes/api/urls.py:37:    ViajesDisponiblesConductorView,
+apps/viajes/api/urls.py:50:        "disponibles/",
+apps/viajes/api/urls.py:51:        ViajesDisponiblesConductorView.as_view(),
+apps/viajes/api/urls.py:52:        name="viajes-disponibles",
+apps/viajes/api/views.py:39:    validar_conductor_disponible,
+apps/viajes/api/views.py:55:    ViajeDisponibleSerializer,
+apps/viajes/api/views.py:140:class ViajesDisponiblesConductorView(
+apps/viajes/api/views.py:167:                validar_conductor_disponible(
+apps/viajes/api/views.py:405:                    ViajeDisponibleSerializer(
+Binary file apps/viajes/api/__pycache__/serializers.cpython-312.pyc matches
+Binary file apps/viajes/api/__pycache__/urls.cpython-312.pyc matches
+Binary file apps/viajes/api/__pycache__/views.cpython-312.pyc matches
+apps/viajes/management/commands/auditar_topo_driver.py:130:        conductores_disponibles_con_viaje = (
+apps/viajes/management/commands/auditar_topo_driver.py:133:                disponible=True,
+apps/viajes/management/commands/auditar_topo_driver.py:142:                disponible=False,
+apps/viajes/management/commands/auditar_topo_driver.py:192:            "Conductores disponibles con viaje",
+apps/viajes/management/commands/auditar_topo_driver.py:193:            conductores_disponibles_con_viaje,
+apps/viajes/management/commands/auditar_topo_driver.py:209:            conductores_disponibles_con_viaje,
+Binary file apps/viajes/management/commands/__pycache__/auditar_topo_driver.cpython-312.pyc matches
+apps/viajes/ofertas_services.py:21:    validar_conductor_disponible,
+apps/viajes/ofertas_services.py:51:    validar_conductor_disponible(
+apps/viajes/services.py:24:    validar_conductor_disponible,
+apps/viajes/services.py:87:            "no está disponible."
+apps/viajes/services.py:196:        validar_conductor_disponible(
+apps/viajes/services.py:274:            "El viaje ya no está disponible."
+apps/viajes/services.py:821:        titulo="Conductor no disponible",
+Binary file apps/viajes/__pycache__/ofertas_services.cpython-312.pyc matches
+Binary file apps/viajes/__pycache__/services.cpython-312.pyc matches
+apps/seguimiento/api/conductores_cercanos_views.py:1:"""Consulta móvil de conductores disponibles cerca del pasajero."""
+apps/seguimiento/api/conductores_cercanos_views.py:95:                disponible=True,
+apps/seguimiento/api/serializers.py:9:    disponible = serializers.BooleanField()
+apps/seguimiento/api/views.py:81:                disponible=(
+apps/seguimiento/api/views.py:83:                        "disponible"
+apps/seguimiento/api/views.py:98:                "disponible": estado.disponible,
+apps/seguimiento/api/views.py:151:                "disponible": estado.disponible,
+apps/seguimiento/api/views.py:225:                "no está disponible en este estado."
+apps/seguimiento/api/views.py:251:                    "ubicacion_disponible": False,
+apps/seguimiento/api/views.py:264:                "ubicacion_disponible": True,
+apps/seguimiento/api/views.py:319:                "disponible": estado.disponible,
+Binary file apps/seguimiento/api/__pycache__/conductores_cercanos_views.cpython-312.pyc matches
+Binary file apps/seguimiento/api/__pycache__/serializers.cpython-312.pyc matches
+Binary file apps/seguimiento/api/__pycache__/views.cpython-312.pyc matches
+apps/seguimiento/management/commands/desconectar_conductores_inactivos.py:37:            disponible=False,
+Binary file apps/seguimiento/management/commands/__pycache__/desconectar_conductores_inactivos.cpython-312.pyc matches
+apps/seguimiento/migrations/0001_initial.py:24:                ('disponible', models.BooleanField(db_index=True, default=False)),
+apps/seguimiento/migrations/0001_initial.py:40:                'indexes': [models.Index(fields=['disponible', 'ultima_ubicacion'], name='conductor_disponible_idx')],
+Binary file apps/seguimiento/migrations/__pycache__/0001_initial.cpython-312.pyc matches
+apps/seguimiento/models.py:34:    disponible = models.BooleanField(
+apps/seguimiento/models.py:142:                    "disponible",
+apps/seguimiento/models.py:145:                name="conductor_disponible_idx",
+apps/seguimiento/models.py:158:            "Disponible"
+apps/seguimiento/models.py:159:            if self.disponible
+apps/seguimiento/models.py:160:            else "No disponible"
+apps/seguimiento/services.py:74:    disponible,
+apps/seguimiento/services.py:97:    if disponible and viaje_actual:
+apps/seguimiento/services.py:99:            "No puedes marcarte disponible "
+apps/seguimiento/services.py:111:    estado.disponible = disponible
+apps/seguimiento/services.py:118:            "disponible",
+apps/seguimiento/services.py:178:        estado.disponible = False
+apps/seguimiento/services.py:180:        estado.disponible = True
+apps/seguimiento/services.py:185:            "disponible",
+apps/seguimiento/services.py:212:    estado.disponible = False
+apps/seguimiento/services.py:219:            "disponible",
+apps/seguimiento/services.py:246:    # disponible para recibir solicitudes.
+apps/seguimiento/services.py:247:    estado.disponible = estado.en_linea
+apps/seguimiento/services.py:252:            "disponible",
+apps/seguimiento/services.py:264:def validar_conductor_disponible(
+apps/seguimiento/services.py:283:        or not estado.disponible
+apps/seguimiento/services.py:286:            "El conductor no está disponible."
+apps/seguimiento/services.py:302:        estado.disponible = False
+apps/seguimiento/services.py:307:                "disponible",
+apps/seguimiento/services.py:364:    estado.disponible = False
+apps/seguimiento/services.py:371:            "disponible",
+Binary file apps/seguimiento/__pycache__/models.cpython-312.pyc matches
+Binary file apps/seguimiento/__pycache__/services.cpython-312.pyc matches
+App_taxi/api/urls.py:65:    path("conductores/disponibles/",ConductorViewSet.as_view({"get": "disponibles"}),name="conductores-disponibles-directo"),
+App_taxi/api/urls.py:66:    path("conductores/disponibles-usuario/",ConductorViewSet.as_view({"get": "disponibles_usuario"}),name="conductores-disponibles-usuario-directo",),
+App_taxi/api/urls.py:69:    path("vehiculos/disponibles/",VehiculoViewSet.as_view({"get": "disponibles"}),name="vehiculos-disponibles-directo"),
+App_taxi/api/views.py:1104:    @action(detail=False, methods=["get"], url_path="disponibles-usuario")
+App_taxi/api/views.py:1105:    def disponibles_usuario(self, request):
+App_taxi/api/views.py:1137:    @action(detail=False, methods=["get"], url_path="disponibles")
+App_taxi/api/views.py:1138:    def disponibles(self, request):
+App_taxi/api/views.py:1283:    @action(detail=False, methods=["get"], url_path="disponibles")
+App_taxi/api/views.py:1284:    def disponibles(self, request):
+Binary file App_taxi/api/__pycache__/urls.cpython-311.pyc matches
+Binary file App_taxi/api/__pycache__/urls.cpython-312.pyc matches
+Binary file App_taxi/api/__pycache__/views.cpython-311.pyc matches
+Binary file App_taxi/api/__pycache__/views.cpython-312.pyc matches
+App_taxi/migrations/0033_configuracionsistema_app_actualizacion_mensaje_and_more.py:16:            field=models.CharField(default='Hay una nueva versión de Zenda disponible. Actualiza para continuar.', max_length=255),
+Binary file App_taxi/migrations/__pycache__/0033_configuracionsistema_app_actualizacion_mensaje_and_more.cpython-312.pyc matches
+App_taxi/models.py:806:            "Hay una nueva versión de Zenda disponible. "
+Binary file App_taxi/__pycache__/models.cpython-312.pyc matches

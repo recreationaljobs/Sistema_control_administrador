@@ -69,6 +69,7 @@ class ViajeSerializer(
             "conductor",
             "vehiculo",
             "tipo_vehiculo",
+            "cantidad_pasajeros",
             "sucursal",
             "estado",
             "origen_direccion",
@@ -181,6 +182,12 @@ class SolicitarViajeSerializer(
         )
     )
 
+    cantidad_pasajeros = serializers.IntegerField(
+        min_value=1,
+        max_value=4,
+        default=1,
+    )
+
     origen_direccion = serializers.CharField(
         max_length=255,
     )
@@ -252,6 +259,43 @@ class SolicitarViajeSerializer(
 
     def validate(self, attrs):
         request = self.context.get("request")
+
+        tipo_vehiculo = attrs["tipo_vehiculo"]
+        cantidad_pasajeros = attrs.get(
+            "cantidad_pasajeros",
+            1,
+        )
+
+        codigo_tipo = str(
+            tipo_vehiculo.codigo or ""
+        ).strip().lower()
+
+        if codigo_tipo not in {
+            "taxi",
+            "mototaxi",
+        }:
+            cantidad_pasajeros = 1
+
+        capacidad = max(
+            int(
+                tipo_vehiculo.capacidad_pasajeros
+                or 1
+            ),
+            1,
+        )
+
+        if cantidad_pasajeros > capacidad:
+            raise serializers.ValidationError({
+                "cantidad_pasajeros": (
+                    "La cantidad de pasajeros supera "
+                    f"la capacidad del {tipo_vehiculo.nombre}: "
+                    f"máximo {capacidad}."
+                )
+            })
+
+        attrs["cantidad_pasajeros"] = (
+            cantidad_pasajeros
+        )
 
         pasajero = (
             Pasajero.objects
@@ -394,6 +438,7 @@ class ViajeDisponibleSerializer(
             "pasajero",
             "pasajero_nombre",
             "tipo_vehiculo",
+            "cantidad_pasajeros",
             "estado",
             "distancia_recogida_km",
             "origen_direccion",
