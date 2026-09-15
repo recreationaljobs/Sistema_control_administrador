@@ -3293,8 +3293,9 @@ class AdelantoViewSet(viewsets.ModelViewSet):
             return qs.filter(sucursal=user.sucursal)
 
         if es_taxista(user):
-            return qs.filter(sucursal=user.sucursal, conductor__usuario=user)
-
+            return qs.filter(
+                conductor__usuario=user
+            )
         return qs.none()
 
     @action(
