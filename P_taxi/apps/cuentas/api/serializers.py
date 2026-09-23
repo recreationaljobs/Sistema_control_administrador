@@ -500,26 +500,29 @@ class RegistroConductorSerializer(serializers.Serializer):
         rol_taxista = Rol.objects.get(codigo="taxista")
 
         usuario = Usuario.objects.create_user(
-            username=telefono,
-            password=password,
-            first_name=validated_data["nombre"],
-            last_name=validated_data["apellido"],
-            email=email,
-            telefono=telefono,
-            rol=rol_taxista,
-            sucursal=None,
-            is_active=True,
+        username=telefono,
+        password=password,
+        first_name=validated_data["nombre"],
+        last_name=validated_data["apellido"],
+        email=email,
+        telefono=telefono,
+        rol=rol_taxista,
+        sucursal=None,
+        is_active=True,
+        origen_registro="zenda_mobile",
         )
 
         conductor = Conductor.objects.create(
-            usuario=usuario,
-            sucursal=None,
-            nombre=validated_data["nombre"],
-            apellido=validated_data["apellido"],
-            telefono=telefono,
-            cedula=validated_data["cedula"],
-            estado_verificacion="pendiente",
-            activo=False,
+        usuario=usuario,
+        sucursal=None,
+        nombre=validated_data["nombre"],
+        apellido=validated_data["apellido"],
+        telefono=telefono,
+        cedula=validated_data["cedula"],
+        estado_verificacion="pendiente",
+        activo=False,
+        origen_registro="zenda_mobile",
+        habilitado_zenda=True,
         )
 
         tipo_vehiculo = vehiculo_data.pop(
@@ -557,6 +560,7 @@ class RegistroConductorSerializer(serializers.Serializer):
                 "kilometraje_actual",
                 0,
             ),
+            origen_registro="zenda_mobile",
         )
 
         conductor.vehiculo_registrado = vehiculo

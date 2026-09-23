@@ -10,7 +10,7 @@ from django.utils import timezone # type: ignore[reportMissingModuleSource]
 from django.utils.dateparse import parse_date # type: ignore[reportMissingModuleSource]
 from django.http import HttpResponse # type: ignore[reportMissingModuleSource]
 from rest_framework.pagination import PageNumberPagination # type: ignore[reportMissingModuleSource]
-from django.core.exceptions import (
+from django.core.exceptions import ( # pyright: ignore[reportMissingModuleSource]
     ValidationError as DjangoValidationError,
 )
 
@@ -187,12 +187,56 @@ class RegistrarDispositivoNotificacionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        origen = str(
+            request.data.get("origen") or ""
+        ).strip().lower()
+
+        # Compatibilidad con clientes anteriores:
+        # pasajeros pertenecen a Zenda; administradores al panel web.
+        # Para taxistas, la app móvil nueva debe enviar zenda_mobile.
+        if not origen:
+            if codigo_rol == "pasajero":
+                origen = DispositivoNotificacion.ORIGEN_ZENDA
+            else:
+                origen = DispositivoNotificacion.ORIGEN_ADMIN
+
+        origenes_permitidos = {
+            DispositivoNotificacion.ORIGEN_ZENDA,
+            DispositivoNotificacion.ORIGEN_ADMIN,
+        }
+
+        if origen not in origenes_permitidos:
+            return Response(
+                {
+                    "origen": (
+                        "Origen de notificaciones inválido. "
+                        "Usa zenda_mobile o admin_web."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if (
+            origen == DispositivoNotificacion.ORIGEN_ZENDA
+            and codigo_rol not in {"pasajero", "taxista"}
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "Este usuario no puede registrar "
+                        "un dispositivo de Zenda móvil."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         dispositivo, creado = (
             DispositivoNotificacion.objects
             .update_or_create(
                 token=token,
                 defaults={
                     "usuario": usuario,
+                    "origen": origen,
                     "activo": True,
                 },
             )
@@ -204,11 +248,17 @@ class RegistrarDispositivoNotificacionView(APIView):
                 "viajes y nuevas contraofertas."
             )
         elif codigo_rol == "taxista":
-            tipo_notificaciones = (
-                "Recibirás recordatorios para abrir y cerrar "
-                "tu jornada, además de alertas del próximo "
-                "cambio de aceite del vehículo asignado."
-            )
+            if origen == DispositivoNotificacion.ORIGEN_ZENDA:
+                tipo_notificaciones = (
+                    "Recibirás nuevas solicitudes de viaje, "
+                    "contraofertas y actualizaciones de Zenda."
+                )
+            else:
+                tipo_notificaciones = (
+                    "Recibirás recordatorios para abrir y cerrar "
+                    "tu jornada, además de alertas del próximo "
+                    "cambio de aceite del vehículo asignado."
+                )
 
         elif codigo_rol == "admin_sucursal":
             tipo_notificaciones = (
@@ -237,6 +287,7 @@ class RegistrarDispositivoNotificacionView(APIView):
                 "dispositivo_id": dispositivo.id,
                 "creado": creado,
                 "rol": codigo_rol,
+                "origen": origen,
                 "sucursal": (
                     usuario.sucursal_id
                     if usuario.sucursal_id
@@ -619,10 +670,17 @@ class UsuarioViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        queryset = Usuario.objects.select_related(
-            "rol",
-            "sucursal"
-        ).all().order_by("-id")
+        queryset = (
+            Usuario.objects
+            .select_related(
+                "rol",
+                "sucursal",
+            )
+            .filter(
+                origen_registro="admin"
+            )
+            .order_by("-id")
+        )
 
         if es_superadmin(user):
             # El superadministrador no verá taxistas que
@@ -1016,7 +1074,9 @@ class ConductorViewSet(viewsets.ModelViewSet):
                 "sucursal",
                 "usuario",
             )
-            .all()
+            .filter(
+                origen_registro="admin"
+            )
             .order_by("-id")
         )
 
@@ -1217,7 +1277,9 @@ class VehiculoViewSet(viewsets.ModelViewSet):
                     to_attr="documentos_prefetch",
                 )
             )
-            .all()
+            .filter(
+                origen_registro="admin"
+            )
             .order_by("placa")
         )
 

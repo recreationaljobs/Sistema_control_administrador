@@ -1,12 +1,12 @@
 import logging
 from pathlib import Path
 
-import firebase_admin
-from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
-from firebase_admin import credentials, messaging
+import firebase_admin # pyright: ignore[reportMissingImports]
+from django.conf import settings # pyright: ignore[reportMissingModuleSource]
+from django.core.exceptions import ImproperlyConfigured # pyright: ignore[reportMissingModuleSource]
+from firebase_admin import credentials, messaging # pyright: ignore[reportMissingImports]
 
-from django.utils import timezone
+from django.utils import timezone # pyright: ignore[reportMissingModuleSource]
 
 from App_taxi.models import (
     AsignacionVehiculo,
@@ -61,12 +61,14 @@ def enviar_notificacion_usuario(
     url="",
     tag="",
     datos=None,
+    origen=DispositivoNotificacion.ORIGEN_ADMIN,
 ):
     dispositivos = (
         DispositivoNotificacion.objects
         .filter(
             usuario=usuario,
             activo=True,
+            origen=origen,
         )
     )
 

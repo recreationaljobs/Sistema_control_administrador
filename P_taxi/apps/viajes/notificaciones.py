@@ -3,12 +3,15 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-from django.db import ( # pyright: ignore[reportMissingModuleSource]
+from django.db import (  # pyright: ignore[reportMissingModuleSource]
     close_old_connections,
-    transaction, # pyright: ignore[reportMissingModuleSource]
+    transaction,  # pyright: ignore[reportMissingModuleSource]
 )
 
-from App_taxi.models import Conductor
+from App_taxi.models import (
+    Conductor,
+    DispositivoNotificacion,
+)
 from App_taxi.notification_services import (
     enviar_notificacion_usuario,
 )
@@ -41,6 +44,7 @@ def _enviar_notificacion_segura(
             url=url,
             tag=tag,
             datos=datos,
+            origen=DispositivoNotificacion.ORIGEN_ZENDA,
         )
     except Exception:
         logger.exception(
@@ -156,9 +160,8 @@ def _enviar_nuevo_viaje_a_conductores(
     Envía el nuevo viaje a conductores con el tipo
     de vehículo solicitado.
 
-    No exige que el conductor tenga en_linea=True.
-    Solamente requiere conductor, usuario, vehículo
-    y notificaciones activas.
+    Solo considera conductores cuyo usuario tenga al menos
+    un dispositivo activo registrado desde Zenda móvil.
     """
     close_old_connections()
 
@@ -189,6 +192,9 @@ def _enviar_nuevo_viaje_a_conductores(
                 usuario__isnull=False,
                 usuario__is_active=True,
                 usuario__dispositivos_notificacion__activo=True,
+                usuario__dispositivos_notificacion__origen=(
+                    DispositivoNotificacion.ORIGEN_ZENDA
+                ),
                 asignaciones__activa=True,
                 asignaciones__vehiculo__estado_verificacion="aprobado",
                 asignaciones__vehiculo__tipo_vehiculo=(
@@ -235,7 +241,7 @@ def _enviar_nuevo_viaje_a_conductores(
             )
 
         logger.info(
-            "Viaje %s notificado a %s dispositivo(s).",
+            "Viaje %s notificado a %s dispositivo(s) de Zenda.",
             viaje.id,
             enviados,
         )

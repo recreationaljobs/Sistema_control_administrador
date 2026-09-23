@@ -9,6 +9,15 @@ from django.db.models import Q
 from django.utils import timezone
 
 
+
+ORIGEN_ADMIN = "admin"
+ORIGEN_ZENDA = "zenda_mobile"
+
+ORIGEN_REGISTRO_CHOICES = [
+    (ORIGEN_ADMIN, "Sistema administrativo"),
+    (ORIGEN_ZENDA, "Zenda móvil"),
+]
+
 class Sucursal(models.Model):
     nombre = models.CharField(max_length=150)
     propietario = models.CharField(max_length=150, blank=True, null=True)
@@ -57,7 +66,18 @@ class Usuario(AbstractUser):
         related_name="usuarios"
     )
 
-    telefono = models.CharField(max_length=20, blank=True, null=True)
+    telefono = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+    )
+
+    origen_registro = models.CharField(
+        max_length=20,
+        choices=ORIGEN_REGISTRO_CHOICES,
+        default=ORIGEN_ADMIN,
+        db_index=True,
+    )
 
     class Meta:
         verbose_name = "Usuario"
@@ -65,7 +85,12 @@ class Usuario(AbstractUser):
         ordering = ["-id"]
 
     def __str__(self):
-        rol_nombre = self.rol.nombre if self.rol else "Sin rol"
+        rol_nombre = (
+            self.rol.nombre
+            if self.rol
+            else "Sin rol"
+        )
+
         return f"{self.username} - {rol_nombre}"
 
 
@@ -231,6 +256,22 @@ class Conductor(models.Model):
     fecha_registro = models.DateTimeField(auto_now_add=True)
     activo = models.BooleanField(default=True)
 
+    origen_registro = models.CharField(
+        max_length=20,
+        choices=ORIGEN_REGISTRO_CHOICES,
+        default=ORIGEN_ADMIN,
+        db_index=True,
+        )
+
+    habilitado_zenda = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=(
+            "Indica si este conductor puede utilizar "
+            "la aplicación móvil Zenda."
+        ),
+    )
+
     class Meta:
         verbose_name = "Conductor"
         verbose_name_plural = "Conductores"
@@ -331,6 +372,13 @@ class Vehiculo(models.Model):
     alerta_previa_km = models.PositiveIntegerField(default=300)
 
     fecha_registro = models.DateTimeField(auto_now_add=True)
+
+    origen_registro = models.CharField(
+        max_length=20,
+        choices=ORIGEN_REGISTRO_CHOICES,
+        default=ORIGEN_ADMIN,
+        db_index=True,
+    )
 
     class Meta:
         verbose_name = "Vehículo"
@@ -934,6 +982,16 @@ class DetalleLiquidacion(models.Model):
     
 
 class DispositivoNotificacion(models.Model):
+    ORIGEN_ZENDA = "zenda_mobile"
+    ORIGEN_ADMIN = "admin_web"
+    ORIGEN_LEGACY = "legacy"
+
+    ORIGEN_CHOICES = [
+        (ORIGEN_ZENDA, "Zenda móvil"),
+        (ORIGEN_ADMIN, "Sistema administrativo"),
+        (ORIGEN_LEGACY, "Sin clasificar (legacy)"),
+    ]
+
     usuario = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -943,6 +1001,13 @@ class DispositivoNotificacion(models.Model):
     token = models.CharField(
         max_length=512,
         unique=True,
+    )
+
+    origen = models.CharField(
+        max_length=20,
+        choices=ORIGEN_CHOICES,
+        default=ORIGEN_LEGACY,
+        db_index=True,
     )
 
     activo = models.BooleanField(
@@ -960,6 +1025,7 @@ class DispositivoNotificacion(models.Model):
     def __str__(self):
         return (
             f"{self.usuario.username} - "
+            f"{self.origen} - "
             f"{'Activo' if self.activo else 'Inactivo'}"
         )
 
