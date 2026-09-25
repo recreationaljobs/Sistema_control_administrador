@@ -1,22 +1,22 @@
 import secrets
 
-from django.conf import settings
-from django.contrib.auth.hashers import (
+from django.conf import settings # type: ignore
+from django.contrib.auth.hashers import ( # type: ignore
     check_password,
     make_password,
 )
-from django.core.mail import send_mail
-from django.db import transaction
-from django.db.models import Q
-from django.utils import timezone
-from rest_framework import status
-from rest_framework.authtoken.models import Token
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from rest_framework.throttling import (
+from django.core.mail import send_mail # type: ignore
+from django.db import transaction # type: ignore
+from django.db.models import Q # type: ignore
+from django.utils import timezone # type: ignore
+from rest_framework import status # type: ignore
+from rest_framework.authtoken.models import Token # type: ignore
+from rest_framework.permissions import AllowAny # type: ignore
+from rest_framework.response import Response # type: ignore
+from rest_framework.throttling import ( # type: ignore
     SimpleRateThrottle,
 )
-from rest_framework.views import APIView
+from rest_framework.views import APIView # type: ignore
 
 from App_taxi.models import Usuario
 

@@ -1,8 +1,8 @@
 """Servicios para aprobar o bloquear conductores y sus vehículos."""
 
-from django.core.exceptions import ValidationError
-from django.db import transaction
-from django.utils import timezone
+from django.core.exceptions import ValidationError # type: ignore
+from django.db import transaction # type: ignore
+from django.utils import timezone # type: ignore
 
 from App_taxi.models import (
     AsignacionVehiculo,

@@ -1,15 +1,19 @@
 """Serializadores de cuentas móviles."""
 from datetime import date
 
-from django.contrib.auth.password_validation import (
+from django.contrib.auth.password_validation import ( # pyright: ignore[reportMissingModuleSource]
     validate_password,
 )
-from django.core.exceptions import (
+from django.core.exceptions import ( # pyright: ignore[reportMissingModuleSource]
     ValidationError as DjangoValidationError,
 )
-from django.db import transaction
-from django.db.models import Q
-from rest_framework import serializers
+from django.db import transaction # pyright: ignore[reportMissingModuleSource]
+from django.db.models import Q # pyright: ignore[reportMissingModuleSource]
+from rest_framework import serializers # pyright: ignore[reportMissingImports]
+from rest_framework.parsers import ( # pyright: ignore[reportMissingImports]
+    FormParser,
+    MultiPartParser,
+)
 
 from App_taxi.models import (
     Conductor,
@@ -566,3 +570,38 @@ class RegistroConductorSerializer(serializers.Serializer):
         conductor.vehiculo_registrado = vehiculo
 
         return conductor
+
+
+class FotoPerfilSerializer(serializers.Serializer):
+    foto = serializers.ImageField(
+        required=True,
+        allow_empty_file=False,
+    )
+
+    def validate_foto(self, foto):
+        # Máximo 5 MB
+        max_size = 5 * 1024 * 1024
+
+        if foto.size > max_size:
+            raise serializers.ValidationError(
+                "La imagen no puede superar los 5 MB."
+            )
+
+        tipos_permitidos = {
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+        }
+
+        content_type = getattr(
+            foto,
+            "content_type",
+            "",
+        )
+
+        if content_type not in tipos_permitidos:
+            raise serializers.ValidationError(
+                "Formato no permitido. Usa JPG, PNG o WEBP."
+            )
+
+        return foto

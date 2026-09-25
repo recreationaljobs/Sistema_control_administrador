@@ -13,8 +13,8 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 import os
 from pathlib import Path
 
-import pymysql
-from dotenv import load_dotenv
+import pymysql # type: ignore
+from dotenv import load_dotenv # type: ignore
 
 
 # ============================================================
@@ -72,20 +72,17 @@ GOOGLE_MAPS_REQUEST_TIMEOUT = int(
 )
 
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.getenv(
-        "ALLOWED_HOSTS",
-        (
-            "127.0.0.1,"
-            "localhost,"
-            "169.58.2.183,"
-            "10.167.83.253,"
-            "taxiadmin.servitaxitortuguero.com"
-        ),
-    ).split(",")
-    if host.strip()
-]
+if DEBUG:
+    ALLOWED_HOSTS = ["*"]
+else:
+    ALLOWED_HOSTS = [
+        host.strip()
+        for host in os.getenv(
+            "ALLOWED_HOSTS",
+            "taxiadmin.servitaxitortuguero.com",
+        ).split(",")
+        if host.strip()
+    ]
 
 
 # Indica a Django que Nginx está gestionando HTTPS.

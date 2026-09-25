@@ -1,10 +1,10 @@
-from django.contrib.auth.password_validation import (
+from django.contrib.auth.password_validation import ( # type: ignore
     validate_password,
 )
-from django.core.exceptions import (
+from django.core.exceptions import ( # type: ignore
     ValidationError as DjangoValidationError,
 )
-from rest_framework import serializers
+from rest_framework import serializers # type: ignore
 
 
 class SolicitarCodigoPasswordSerializer(

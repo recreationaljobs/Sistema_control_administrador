@@ -2,13 +2,13 @@
 
 from decimal import Decimal
 
-from django.core.exceptions import (
+from django.core.exceptions import ( # type: ignore
     ValidationError,
 )
-from django.db import transaction
+from django.db import transaction # type: ignore
 
 from apps.pasajeros.models import Pasajero
-from django.utils import timezone
+from django.utils import timezone # type: ignore
 
 from App_taxi.models import (
     AsignacionVehiculo,

@@ -52,6 +52,26 @@ def obtener_resumen_calificacion(
         "total": resultado["total"],
     }
 
+
+def obtener_foto_perfil_url(usuario, request=None):
+    if not usuario:
+        return None
+
+    foto = getattr(usuario, "foto_perfil", None)
+
+    if not foto:
+        return None
+
+    try:
+        url = foto.url
+    except ValueError:
+        return None
+
+    if request:
+        return request.build_absolute_uri(url)
+
+    return url   
+
 class ViajeSerializer(
     serializers.ModelSerializer
 ):
@@ -107,6 +127,7 @@ class ViajeSerializer(
 
     def get_pasajero(self, obj):
         usuario = obj.pasajero.usuario
+        request = self.context.get("request")
 
         resumen = obtener_resumen_calificacion(
             usuario_id=usuario.id,
@@ -121,6 +142,10 @@ class ViajeSerializer(
             "nombre": usuario.first_name,
             "apellido": usuario.last_name,
             "telefono": usuario.telefono,
+            "foto_perfil_url": obtener_foto_perfil_url(
+            usuario,
+            request,
+        ),
             "calificacion": (
                 resumen["promedio"]
             ),
@@ -132,6 +157,10 @@ class ViajeSerializer(
     def get_conductor(self, obj):
         if not obj.conductor:
             return None
+
+        usuario = obj.conductor.usuario
+        request = self.context.get("request")
+
 
         resumen = obtener_resumen_calificacion(
             usuario_id=(
@@ -148,6 +177,10 @@ class ViajeSerializer(
             "nombre": obj.conductor.nombre,
             "apellido": obj.conductor.apellido,
             "telefono": obj.conductor.telefono,
+            "foto_perfil_url": obtener_foto_perfil_url(
+            usuario,
+            request,
+        ),
             "calificacion": (
                 resumen["promedio"]
             ),
@@ -464,6 +497,7 @@ class ViajeDisponibleSerializer(
         self,
         obj,
     ):
+        request = self.context.get("request")
         usuario = obj.pasajero.usuario
 
         resumen = obtener_resumen_calificacion(
@@ -478,6 +512,10 @@ class ViajeDisponibleSerializer(
             "id": obj.pasajero_id,
             "nombre": usuario.first_name,
             "apellido": usuario.last_name,
+            "foto_perfil_url": obtener_foto_perfil_url(
+            usuario,
+            request,
+        ),
             "calificacion": (
                 resumen["promedio"]
             ),

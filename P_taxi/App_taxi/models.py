@@ -79,6 +79,12 @@ class Usuario(AbstractUser):
         db_index=True,
     )
 
+    foto_perfil = models.ImageField(
+            upload_to="perfiles/%Y/%m/",
+            blank=True,
+            null=True,
+        )
+
     class Meta:
         verbose_name = "Usuario"
         verbose_name_plural = "Usuarios"
@@ -379,6 +385,8 @@ class Vehiculo(models.Model):
         default=ORIGEN_ADMIN,
         db_index=True,
     )
+
+   
 
     class Meta:
         verbose_name = "Vehículo"

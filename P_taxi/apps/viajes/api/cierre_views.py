@@ -1,13 +1,13 @@
 """Vistas para gestionar el cierre de un viaje."""
 
-from rest_framework.exceptions import (
+from rest_framework.exceptions import ( # type: ignore
     PermissionDenied,
 )
-from rest_framework.permissions import (
+from rest_framework.permissions import ( # type: ignore
     IsAuthenticated,
 )
-from rest_framework.response import Response
-from rest_framework.views import APIView
+from rest_framework.response import Response # type: ignore
+from rest_framework.views import APIView # pyright: ignore[reportMissingImports]
 
 from App_taxi.models import Conductor
 from apps.pasajeros.models import Pasajero

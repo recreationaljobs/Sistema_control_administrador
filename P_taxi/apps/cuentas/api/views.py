@@ -3,6 +3,10 @@ from rest_framework import status # type: ignore
 from rest_framework.authtoken.models import ( # type: ignore
     Token,
 )
+from rest_framework.parsers import ( # type: ignore
+    FormParser,
+    MultiPartParser,
+)
 
 from rest_framework.permissions import ( # type: ignore
     AllowAny,IsAuthenticated,
@@ -33,9 +37,9 @@ from apps.cuentas.models import (
 
 from .serializers import (
     ActivarConductorSerializer,
+    FotoPerfilSerializer,
     RegistroConductorSerializer,
 )
-
 class ActivarConductorThrottle(
     SimpleRateThrottle
 ):
@@ -396,6 +400,13 @@ class MiPerfilConductorView(APIView):
                         if request.user.rol
                         else None
                     ),
+                    "foto_perfil_url": (
+                        request.build_absolute_uri(
+                            request.user.foto_perfil.url
+                        )
+                        if request.user.foto_perfil
+                        else None
+                    ),
                 },
                 "conductor": {
                     "id": conductor.id,
@@ -487,6 +498,130 @@ class MiPerfilConductorView(APIView):
                 ),
                 "puede_trabajar": puede_trabajar,
                 "estado_app": estado_app,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+class FotoPerfilView(APIView):
+    permission_classes = [
+        IsAuthenticated,
+    ]
+
+    parser_classes = [
+        MultiPartParser,
+        FormParser,
+    ]
+
+    def get(self, request):
+        usuario = request.user
+
+        foto_url = None
+
+        if (
+            hasattr(usuario, "foto_perfil")
+            and usuario.foto_perfil
+        ):
+            foto_url = request.build_absolute_uri(
+                usuario.foto_perfil.url
+            )
+
+        return Response(
+        {
+            "usuario_id": usuario.id,
+            "nombre": usuario.first_name,
+            "apellido": usuario.last_name,
+            "telefono": usuario.telefono,
+            "email": usuario.email,
+            "rol": (
+                usuario.rol.codigo
+                if usuario.rol
+                else None
+            ),
+            "foto_perfil_url": foto_url,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+    def patch(self, request):
+        serializer = FotoPerfilSerializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        usuario = request.user
+        nueva_foto = serializer.validated_data[
+            "foto"
+        ]
+
+        # Elimina físicamente la foto anterior.
+        if (
+            hasattr(usuario, "foto_perfil")
+            and usuario.foto_perfil
+        ):
+            usuario.foto_perfil.delete(
+                save=False
+            )
+
+        usuario.foto_perfil = nueva_foto
+        usuario.save(
+            update_fields=[
+                "foto_perfil",
+            ]
+        )
+
+        foto_url = request.build_absolute_uri(
+            usuario.foto_perfil.url
+        )
+
+        return Response(
+            {
+                "mensaje": (
+                    "Foto de perfil actualizada "
+                    "correctamente."
+                ),
+                "foto_perfil_url": foto_url,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        usuario = request.user
+
+        if (
+            not hasattr(usuario, "foto_perfil")
+            or not usuario.foto_perfil
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "El usuario no tiene una "
+                        "foto de perfil."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        usuario.foto_perfil.delete(
+            save=False
+        )
+
+        usuario.foto_perfil = None
+
+        usuario.save(
+            update_fields=[
+                "foto_perfil",
+            ]
+        )
+
+        return Response(
+            {
+                "mensaje": (
+                    "Foto de perfil eliminada "
+                    "correctamente."
+                )
             },
             status=status.HTTP_200_OK,
         )

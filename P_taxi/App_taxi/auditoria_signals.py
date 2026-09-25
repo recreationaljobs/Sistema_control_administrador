@@ -2,6 +2,7 @@
 from datetime import date, datetime, time
 from decimal import Decimal
 from uuid import UUID
+from django.db.models.fields.files import FieldFile
 
 from django.db.models.signals import (
     post_delete,
@@ -58,6 +59,10 @@ def convertir_valor(valor):
     if valor is None:
         return None
 
+    # ImageField y FileField
+    if isinstance(valor, FieldFile):
+        return valor.name if valor.name else None
+
     if isinstance(valor, (Decimal, UUID)):
         return str(valor)
 
@@ -77,7 +82,6 @@ def convertir_valor(valor):
         ]
 
     return valor
-
 
 def obtener_datos_instancia(instancia):
     datos = {}

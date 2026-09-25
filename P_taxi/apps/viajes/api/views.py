@@ -1,20 +1,20 @@
 """Vistas de viajes."""
 
-from django.core.exceptions import (
+from django.core.exceptions import ( # type: ignore
     ValidationError as DjangoValidationError,
 )
-from rest_framework import status
-from rest_framework.exceptions import (
+from rest_framework import status # type: ignore
+from rest_framework.exceptions import ( # type: ignore
     ValidationError,
 )
-from rest_framework.permissions import (
+from rest_framework.permissions import ( # type: ignore
     IsAuthenticated,
 )
-from rest_framework.response import Response
-from rest_framework.throttling import (
+from rest_framework.response import Response # type: ignore
+from rest_framework.throttling import ( # type: ignore
     SimpleRateThrottle,
 )
-from rest_framework.views import APIView
+from rest_framework.views import APIView # type: ignore
 import math
 
 from decimal import (
@@ -24,7 +24,7 @@ from decimal import (
 from apps.tarifas.services import (
     calcular_distancia_haversine,
 )
-from django.db.models import (
+from django.db.models import ( # type: ignore
     Avg,
     Count,
     Q,

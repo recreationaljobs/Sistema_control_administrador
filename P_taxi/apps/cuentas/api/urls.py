@@ -1,12 +1,15 @@
-from django.urls import path # pyright: ignore[reportMissingModuleSource]
+from django.urls import path  # pyright: ignore[reportMissingModuleSource]
 
 from .password_views import (
     RestablecerPasswordView,
     SolicitarCodigoPasswordView,
 )
+
 from .views import (
     ActivarConductorView,
     RegistroConductorView,
+    MiPerfilConductorView,
+    FotoPerfilView,
 )
 
 
@@ -19,19 +22,34 @@ urlpatterns = [
         ActivarConductorView.as_view(),
         name="activar-conductor",
     ),
+
     path(
         "conductores/registro/",
         RegistroConductorView.as_view(),
         name="registro-conductor",
     ),
+
+    path(
+        "conductores/mi-perfil/",
+        MiPerfilConductorView.as_view(),
+        name="mi-perfil-conductor",
+    ),
+
     path(
         "password/solicitar/",
         SolicitarCodigoPasswordView.as_view(),
         name="solicitar-codigo-password",
     ),
+
     path(
         "password/restablecer/",
         RestablecerPasswordView.as_view(),
         name="restablecer-password",
+    ),
+
+    path(
+        "perfil/foto/",
+        FotoPerfilView.as_view(),
+        name="foto-perfil",
     ),
 ]
